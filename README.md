@@ -1,6 +1,6 @@
 # 私人文件传输助手
 
-这是《私人文件传输助手 V1 — 技术设计冻结规范》的实现工程。当前已完成 Task 01 基线与 Task 02 首次初始化闭环：
+这是《私人文件传输助手 V1 — 技术设计冻结规范》的实现工程。当前已完成 Task 01 基线、Task 02 首次初始化与 Task 03 Windows 配对闭环：
 
 - Go HTTP 服务
 - SQLite migration 基础
@@ -12,8 +12,10 @@
 - Android Kotlin + Jetpack Compose 基础应用
 - 一次性 Android Master Claim
 - Master Token 的服务端 SHA-256 存储与 Android Keystore 加密存储
+- Windows 二维码/6 位码配对与 HttpOnly Cookie 鉴权
+- 单一有效 Windows 及经 Android 确认的原子替换
 
-配对、业务鉴权、消息、WebSocket 与文件传输将在后续任务中实现。
+消息、认证 WebSocket 与文件传输将在后续任务中实现。
 
 ## 启动
 
@@ -41,6 +43,8 @@ docker compose down
 
 首次启动 Android 调试包后，填写电脑局域网地址（例如 `http://192.168.1.10:5757`）及本地 `.env` 中的 `OWNER_SETUP_TOKEN`。Claim 只允许成功一次；卸载应用丢失 Master Token 后，V1 不提供账号恢复。
 
+初始化完成后，在 Windows 打开 Web 页面即可看到两分钟有效的二维码和 6 位备用码。Android 点击“配对 Windows”扫码或手输确认；若已有 Windows，必须在手机上明确确认替换。Browser Token 只写入 `HttpOnly + Secure + SameSite=Strict` Cookie。
+
 ## 本地 Web 开发
 
 ```powershell
@@ -60,7 +64,7 @@ cd android
 ./gradlew.bat testDebugUnitTest assembleDebug lintDebug
 ```
 
-调试 APK 输出到 `android/app/build/outputs/apk/debug/app-debug.apk`。调试包仅为局域网真机测试允许 HTTP；Release 构建仍强制 HTTPS。
+调试 APK 输出到 `android/app/build/outputs/apk/debug/app-debug.apk`。调试包仅为局域网真机测试允许 API 的 HTTP；Release 构建仍强制 HTTPS。扫码使用 CameraX + ZXing Core，不依赖 Google Play 服务。
 
 ## 部署边界
 

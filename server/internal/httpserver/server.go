@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"transdot.local/transfer-assistant/server/internal/deviceauth"
+	"transdot.local/transfer-assistant/server/internal/pairing"
 	"transdot.local/transfer-assistant/server/internal/setup"
 )
 
@@ -25,12 +27,37 @@ type setupService interface {
 	Claim(context.Context, string) (setup.ClaimResult, error)
 }
 
-func New(db databasePinger, setupService setupService, webHandler http.Handler, logger *slog.Logger) http.Handler {
+type deviceAuthenticator interface {
+	Authenticate(context.Context, string, string) (deviceauth.Device, error)
+}
+
+type pairingService interface {
+	Create(context.Context) (pairing.Session, error)
+	Approve(context.Context, pairing.Credential, string, bool) error
+	Reject(context.Context, pairing.Credential) error
+	Poll(context.Context, string, string) (pairing.PollResult, error)
+}
+
+func New(
+	db databasePinger,
+	setupService setupService,
+	authService deviceAuthenticator,
+	pairingService pairingService,
+	webHandler http.Handler,
+	logger *slog.Logger,
+) http.Handler {
 	mux := http.NewServeMux()
 	setupLimiter := newAttemptLimiter(5, 5*time.Minute)
+	pairingCreateLimiter := newAttemptLimiter(10, 2*time.Minute)
+	pairingActionLimiter := newAttemptLimiter(15, 2*time.Minute)
 	mux.HandleFunc("GET /healthz", healthz(db))
 	mux.HandleFunc("GET /api/v1/setup/status", setupStatus(setupService, logger))
 	mux.HandleFunc("POST /api/v1/setup/claim", setupClaim(setupService, setupLimiter, logger))
+	mux.HandleFunc("GET /api/v1/auth/session", browserSession(authService, logger))
+	mux.HandleFunc("POST /api/v1/pairing/sessions", createPairingSession(pairingService, pairingCreateLimiter, logger))
+	mux.HandleFunc("GET /api/v1/pairing/sessions/{id}/status", pairingStatus(pairingService, logger))
+	mux.HandleFunc("POST /api/v1/pairing/approve", approvePairing(authService, pairingService, pairingActionLimiter, logger))
+	mux.HandleFunc("POST /api/v1/pairing/reject", rejectPairing(authService, pairingService, pairingActionLimiter, logger))
 	mux.HandleFunc("/api/", apiNotFound)
 	mux.HandleFunc("/ws", http.NotFound)
 	mux.Handle("/", webHandler)
@@ -64,17 +91,9 @@ func setupClaim(service setupService, limiter *attemptLimiter, logger *slog.Logg
 			return
 		}
 
-		r.Body = http.MaxBytesReader(w, r.Body, 8*1024)
-		decoder := json.NewDecoder(r.Body)
-		decoder.DisallowUnknownFields()
-
 		var request claimRequest
-		if err := decoder.Decode(&request); err != nil {
+		if err := decodeJSONBody(w, r, &request); err != nil {
 			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "Request body must be valid JSON.")
-			return
-		}
-		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "Request body must contain one JSON object.")
 			return
 		}
 		if strings.TrimSpace(request.SetupToken) == "" {
@@ -95,6 +114,19 @@ func setupClaim(service setupService, limiter *attemptLimiter, logger *slog.Logg
 			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error.")
 		}
 	}
+}
+
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, destination any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, 8*1024)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("request body must contain one JSON object")
+	}
+	return nil
 }
 
 func healthz(db databasePinger) http.HandlerFunc {
@@ -133,10 +165,11 @@ type attemptWindow struct {
 }
 
 type attemptLimiter struct {
-	mu       sync.Mutex
-	limit    int
-	duration time.Duration
-	windows  map[string]attemptWindow
+	mu        sync.Mutex
+	limit     int
+	duration  time.Duration
+	windows   map[string]attemptWindow
+	lastSweep time.Time
 }
 
 func newAttemptLimiter(limit int, duration time.Duration) *attemptLimiter {
@@ -146,8 +179,19 @@ func newAttemptLimiter(limit int, duration time.Duration) *attemptLimiter {
 func (l *attemptLimiter) Allow(key string, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.lastSweep.IsZero() || now.Sub(l.lastSweep) >= l.duration {
+		for existingKey, existingWindow := range l.windows {
+			if now.Sub(existingWindow.started) >= l.duration {
+				delete(l.windows, existingKey)
+			}
+		}
+		l.lastSweep = now
+	}
 
 	window, exists := l.windows[key]
+	if !exists && len(l.windows) >= maxAttemptLimiterEntries {
+		return false
+	}
 	if !exists || now.Sub(window.started) >= l.duration {
 		l.windows[key] = attemptWindow{started: now, count: 1}
 		return true
@@ -159,6 +203,8 @@ func (l *attemptLimiter) Allow(key string, now time.Time) bool {
 	l.windows[key] = window
 	return true
 }
+
+const maxAttemptLimiterEntries = 10_000
 
 func remoteIP(remoteAddress string) string {
 	host, _, err := net.SplitHostPort(remoteAddress)

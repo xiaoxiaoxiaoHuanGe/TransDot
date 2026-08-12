@@ -9,7 +9,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"transdot.local/transfer-assistant/server/internal/deviceauth"
+	"transdot.local/transfer-assistant/server/internal/pairing"
 	"transdot.local/transfer-assistant/server/internal/setup"
 )
 
@@ -27,13 +30,44 @@ func testServer(db fakeDatabase) http.Handler {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("web"))
 	})
-	return New(db, fakeSetupService{}, web, logger)
+	return New(db, fakeSetupService{}, fakeAuthService{}, fakePairingService{}, web, logger)
 }
 
 type fakeSetupService struct {
 	initialized bool
 	result      setup.ClaimResult
 	err         error
+}
+
+type fakeAuthService struct {
+	device deviceauth.Device
+	err    error
+}
+
+func (s fakeAuthService) Authenticate(context.Context, string, string) (deviceauth.Device, error) {
+	return s.device, s.err
+}
+
+type fakePairingService struct {
+	session pairing.Session
+	poll    pairing.PollResult
+	err     error
+}
+
+func (s fakePairingService) Create(context.Context) (pairing.Session, error) {
+	return s.session, s.err
+}
+
+func (s fakePairingService) Approve(context.Context, pairing.Credential, string, bool) error {
+	return s.err
+}
+
+func (s fakePairingService) Reject(context.Context, pairing.Credential) error {
+	return s.err
+}
+
+func (s fakePairingService) Poll(context.Context, string, string) (pairing.PollResult, error) {
+	return s.poll, s.err
 }
 
 func (s fakeSetupService) Status(context.Context) (bool, error) {
@@ -60,7 +94,7 @@ func TestHealthz(t *testing.T) {
 
 func TestSetupStatus(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	server := New(fakeDatabase{}, fakeSetupService{initialized: true}, http.NotFoundHandler(), logger)
+	server := New(fakeDatabase{}, fakeSetupService{initialized: true}, fakeAuthService{}, fakePairingService{}, http.NotFoundHandler(), logger)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/setup/status", nil)
 	response := httptest.NewRecorder()
 
@@ -77,7 +111,7 @@ func TestSetupStatus(t *testing.T) {
 func TestSetupClaimReturnsMasterToken(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	service := fakeSetupService{result: setup.ClaimResult{DeviceID: "device-1", MasterToken: "master-token"}}
-	server := New(fakeDatabase{}, service, http.NotFoundHandler(), logger)
+	server := New(fakeDatabase{}, service, fakeAuthService{}, fakePairingService{}, http.NotFoundHandler(), logger)
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/setup/claim", strings.NewReader(`{"setup_token":"owner-token"}`))
 	request.RemoteAddr = "192.0.2.1:1234"
 	response := httptest.NewRecorder()
@@ -94,7 +128,7 @@ func TestSetupClaimReturnsMasterToken(t *testing.T) {
 
 func TestSetupClaimMapsInvalidToken(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	server := New(fakeDatabase{}, fakeSetupService{err: setup.ErrInvalidSetupToken}, http.NotFoundHandler(), logger)
+	server := New(fakeDatabase{}, fakeSetupService{err: setup.ErrInvalidSetupToken}, fakeAuthService{}, fakePairingService{}, http.NotFoundHandler(), logger)
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/setup/claim", strings.NewReader(`{"setup_token":"wrong"}`))
 	request.RemoteAddr = "192.0.2.2:1234"
 	response := httptest.NewRecorder()
@@ -106,6 +140,79 @@ func TestSetupClaimMapsInvalidToken(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), `"code":"SETUP_TOKEN_INVALID"`) {
 		t.Fatalf("body = %q", response.Body.String())
+	}
+}
+
+func TestCreatePairingSessionSetsProtectedCookie(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	service := fakePairingService{session: pairing.Session{
+		ID:           "session-1",
+		Code:         "538219",
+		QRSecret:     strings.Repeat("s", 43),
+		BrowserToken: strings.Repeat("b", 43),
+		ExpiresAt:    time.Now().Add(2 * time.Minute),
+	}}
+	server := New(fakeDatabase{}, fakeSetupService{}, fakeAuthService{}, service, http.NotFoundHandler(), logger)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/pairing/sessions", nil)
+	request.RemoteAddr = "192.0.2.4:1234"
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"pairing_code":"538219"`) || !strings.Contains(response.Body.String(), `"qr_payload"`) {
+		t.Fatalf("body = %q", response.Body.String())
+	}
+	cookies := response.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("cookie count = %d, want 1", len(cookies))
+	}
+	cookie := cookies[0]
+	if cookie.Name != pairingCookieName || !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteStrictMode {
+		t.Fatalf("pairing cookie is not protected: %+v", cookie)
+	}
+}
+
+func TestApprovePairingRequiresMasterBearer(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	server := New(fakeDatabase{}, fakeSetupService{}, fakeAuthService{err: deviceauth.ErrUnauthorized}, fakePairingService{}, http.NotFoundHandler(), logger)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/pairing/approve", strings.NewReader(`{"pairing_code":"538219"}`))
+	request.RemoteAddr = "192.0.2.5:1234"
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", response.Code)
+	}
+}
+
+func TestApprovedPairingStatusSetsBrowserCookie(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	service := fakePairingService{poll: pairing.PollResult{
+		Status:       pairing.StatusApproved,
+		BrowserToken: strings.Repeat("b", 43),
+	}}
+	server := New(fakeDatabase{}, fakeSetupService{}, fakeAuthService{}, service, http.NotFoundHandler(), logger)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/pairing/sessions/session-1/status", nil)
+	request.AddCookie(&http.Cookie{Name: pairingCookieName, Value: strings.Repeat("b", 43)})
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", response.Code, response.Body.String())
+	}
+	var browserCookie *http.Cookie
+	for _, cookie := range response.Result().Cookies() {
+		if cookie.Name == browserCookieName && cookie.Value != "" {
+			browserCookie = cookie
+		}
+	}
+	if browserCookie == nil || !browserCookie.HttpOnly || !browserCookie.Secure || browserCookie.SameSite != http.SameSiteStrictMode {
+		t.Fatalf("browser cookie is missing or unprotected: %+v", browserCookie)
 	}
 }
 

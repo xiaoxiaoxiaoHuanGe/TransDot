@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Button
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -25,7 +26,7 @@ import androidx.compose.ui.unit.dp
 import com.transdot.transferassistant.ui.theme.AppSpacing
 
 @Composable
-fun ReadyScreen(serverAddress: String, deviceId: String) {
+fun ReadyScreen(serverAddress: String, deviceId: String, onPairWindows: () -> Unit) {
     Scaffold(contentWindowInsets = WindowInsets.safeDrawing) { innerPadding ->
         Box(
             modifier = Modifier
@@ -65,13 +66,20 @@ fun ReadyScreen(serverAddress: String, deviceId: String) {
                         fontWeight = FontWeight.Bold,
                     )
                     Text(
-                        text = "Master Token 已使用 Android Keystore 加密保存在本机。下一阶段将开放 Windows 配对。",
+                        text = "Master Token 已使用 Android Keystore 加密保存在本机。现在可以授权一台 Windows 浏览器。",
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 InfoRow(label = "服务器", value = serverAddress)
                 InfoRow(label = "设备 ID", value = deviceId)
+                Button(
+                    onClick = onPairWindows,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.medium,
+                ) {
+                    Text("配对 Windows", fontWeight = FontWeight.SemiBold)
+                }
             }
         }
     }

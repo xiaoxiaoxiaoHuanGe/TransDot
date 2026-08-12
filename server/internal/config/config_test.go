@@ -6,6 +6,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("PORT", "")
 	t.Setenv("DATA_DIR", "")
 	t.Setenv("OWNER_SETUP_TOKEN", "0123456789abcdef0123456789abcdef")
+	t.Setenv("PAIRING_TTL_SECONDS", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -19,6 +20,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.ListenAddress() != "0.0.0.0:5757" {
 		t.Fatalf("ListenAddress() = %q", cfg.ListenAddress())
+	}
+	if cfg.PairingTTL.Seconds() != 120 {
+		t.Fatalf("PairingTTL = %v, want 120s", cfg.PairingTTL)
 	}
 }
 
@@ -36,5 +40,14 @@ func TestLoadRejectsInvalidPort(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want invalid port error")
+	}
+}
+
+func TestLoadRejectsInvalidPairingTTL(t *testing.T) {
+	t.Setenv("OWNER_SETUP_TOKEN", "0123456789abcdef0123456789abcdef")
+	t.Setenv("PAIRING_TTL_SECONDS", "0")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want invalid pairing TTL error")
 	}
 }

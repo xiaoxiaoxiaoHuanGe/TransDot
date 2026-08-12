@@ -12,7 +12,9 @@ import (
 
 	"transdot.local/transfer-assistant/server/internal/config"
 	"transdot.local/transfer-assistant/server/internal/database"
+	"transdot.local/transfer-assistant/server/internal/deviceauth"
 	"transdot.local/transfer-assistant/server/internal/httpserver"
+	"transdot.local/transfer-assistant/server/internal/pairing"
 	"transdot.local/transfer-assistant/server/internal/setup"
 	"transdot.local/transfer-assistant/server/internal/webui"
 )
@@ -33,6 +35,8 @@ func main() {
 	}
 	defer db.Close()
 	setupService := setup.NewService(db, cfg.OwnerSetupToken)
+	authService := deviceauth.NewService(db)
+	pairingService := pairing.NewService(db, cfg.PairingTTL)
 
 	webHandler, err := webui.NewHandler()
 	if err != nil {
@@ -42,7 +46,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddress(),
-		Handler:           httpserver.New(db, setupService, webHandler, logger),
+		Handler:           httpserver.New(db, setupService, authService, pairingService, webHandler, logger),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
