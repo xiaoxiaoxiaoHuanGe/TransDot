@@ -1,0 +1,12 @@
+.git
+.github
+.idea
+.vscode
+.env
+data
+web/node_modules
+web/dist
+android/.gradle
+android/**/build
+*.md
+!README.md

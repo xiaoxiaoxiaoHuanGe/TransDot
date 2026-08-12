@@ -1,0 +1,37 @@
+name: transfer-assistant
+
+services:
+  transfer-assistant:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        OFFICIAL_IMAGE_REGISTRY: "${OFFICIAL_IMAGE_REGISTRY:-public.ecr.aws/docker/library}"
+    image: transfer-assistant:local
+    restart: unless-stopped
+    ports:
+      - "${PORT:-5757}:5757"
+    environment:
+      PORT: "5757"
+      DATA_DIR: /app/data
+      OWNER_SETUP_TOKEN: "${OWNER_SETUP_TOKEN:-}"
+      MAX_FILE_BYTES: "${MAX_FILE_BYTES:-314572800}"
+      MAX_BATCH_BYTES: "${MAX_BATCH_BYTES:-524288000}"
+      MAX_BATCH_ITEMS: "${MAX_BATCH_ITEMS:-20}"
+      FILE_POOL_MAX_BYTES: "${FILE_POOL_MAX_BYTES:-1073741824}"
+      FILE_TTL_HOURS: "${FILE_TTL_HOURS:-24}"
+      FILE_MESSAGE_TTL_DAYS: "${FILE_MESSAGE_TTL_DAYS:-30}"
+      PAIRING_TTL_SECONDS: "${PAIRING_TTL_SECONDS:-120}"
+      UPLOAD_SESSION_TTL_MINUTES: "${UPLOAD_SESSION_TTL_MINUTES:-30}"
+    volumes:
+      - transfer-data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--output-document=-", "http://127.0.0.1:5757/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  transfer-data:
+    name: transfer-assistant-data

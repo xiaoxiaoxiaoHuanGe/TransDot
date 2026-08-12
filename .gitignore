@@ -1,0 +1,29 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Local persistent data
+data/
+
+# Go build output
+bin/
+*.exe
+*.test
+*.out
+
+# Web dependencies and output
+web/node_modules/
+web/dist/
+
+# Android / Gradle (project is initialized in a later task)
+android/.gradle/
+android/local.properties
+android/**/build/
+
+# IDE and operating system files
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
