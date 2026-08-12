@@ -1,12 +1,22 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("PORT", "")
 	t.Setenv("DATA_DIR", "")
 	t.Setenv("OWNER_SETUP_TOKEN", "0123456789abcdef0123456789abcdef")
 	t.Setenv("PAIRING_TTL_SECONDS", "")
+	t.Setenv("MAX_FILE_BYTES", "")
+	t.Setenv("MAX_BATCH_BYTES", "")
+	t.Setenv("MAX_BATCH_ITEMS", "")
+	t.Setenv("FILE_POOL_MAX_BYTES", "")
+	t.Setenv("FILE_TTL_HOURS", "")
+	t.Setenv("FILE_MESSAGE_TTL_DAYS", "")
+	t.Setenv("UPLOAD_SESSION_TTL_MINUTES", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -23,6 +33,12 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.PairingTTL.Seconds() != 120 {
 		t.Fatalf("PairingTTL = %v, want 120s", cfg.PairingTTL)
+	}
+	if cfg.MaxFileBytes != 314572800 || cfg.MaxBatchBytes != 524288000 || cfg.MaxBatchItems != 20 {
+		t.Fatalf("upload limits = %d/%d/%d", cfg.MaxFileBytes, cfg.MaxBatchBytes, cfg.MaxBatchItems)
+	}
+	if cfg.FilePoolMaxBytes != 1073741824 || cfg.FileTTL != 24*time.Hour || cfg.FileMessageTTL != 30*24*time.Hour || cfg.UploadSessionTTL != 30*time.Minute {
+		t.Fatalf("file lifecycle defaults are incorrect: %+v", cfg)
 	}
 }
 

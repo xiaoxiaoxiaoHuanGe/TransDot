@@ -51,6 +51,34 @@ func New(
 	webHandler http.Handler,
 	logger *slog.Logger,
 ) http.Handler {
+	return newHandler(db, setupService, authService, pairingService, messageService, nil, hub, webHandler, logger)
+}
+
+func NewWithFiles(
+	db databasePinger,
+	setupService setupService,
+	authService deviceAuthenticator,
+	pairingService pairingService,
+	messageService messageService,
+	fileService fileService,
+	hub *realtime.Hub,
+	webHandler http.Handler,
+	logger *slog.Logger,
+) http.Handler {
+	return newHandler(db, setupService, authService, pairingService, messageService, fileService, hub, webHandler, logger)
+}
+
+func newHandler(
+	db databasePinger,
+	setupService setupService,
+	authService deviceAuthenticator,
+	pairingService pairingService,
+	messageService messageService,
+	fileService fileService,
+	hub *realtime.Hub,
+	webHandler http.Handler,
+	logger *slog.Logger,
+) http.Handler {
 	mux := http.NewServeMux()
 	setupLimiter := newAttemptLimiter(5, 5*time.Minute)
 	pairingCreateLimiter := newAttemptLimiter(10, 2*time.Minute)
@@ -65,9 +93,16 @@ func New(
 	mux.HandleFunc("POST /api/v1/pairing/reject", rejectPairing(authService, pairingService, pairingActionLimiter, logger))
 	mux.HandleFunc("GET /api/v1/messages", listMessages(authService, messageService, logger))
 	mux.HandleFunc("POST /api/v1/messages/text", createTextMessage(authService, messageService, hub, logger))
-	mux.HandleFunc("DELETE /api/v1/messages/{id}", deleteMessage(authService, messageService, hub, logger))
+	mux.HandleFunc("DELETE /api/v1/messages/{id}", deleteMessage(authService, messageService, fileService, hub, logger))
 	mux.HandleFunc("GET /api/v1/messages/{id}/context", messageContext(authService, messageService, logger))
 	mux.HandleFunc("GET /api/v1/search", searchMessages(authService, messageService, logger))
+	if fileService != nil {
+		mux.HandleFunc("POST /api/v1/upload-batches", createUploadBatch(authService, fileService, logger))
+		mux.HandleFunc("PUT /api/v1/uploads/{id}", uploadFile(authService, fileService, hub, logger))
+		mux.HandleFunc("PUT /api/v1/uploads/{id}/thumbnail", uploadThumbnail(authService, fileService, logger))
+		mux.HandleFunc("GET /api/v1/files/{id}/download", downloadFile(authService, fileService, logger))
+		mux.HandleFunc("GET /api/v1/files/{id}/thumbnail", serveThumbnail(authService, fileService, logger))
+	}
 	mux.HandleFunc("/api/", apiNotFound)
 	mux.HandleFunc("GET /ws", websocketEndpoint(authService, hub, logger))
 	mux.Handle("/", webHandler)

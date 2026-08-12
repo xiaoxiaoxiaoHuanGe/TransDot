@@ -78,6 +78,7 @@ func createTextMessage(
 func deleteMessage(
 	authService deviceAuthenticator,
 	service messageService,
+	fileService fileService,
 	publisher eventPublisher,
 	logger *slog.Logger,
 ) http.HandlerFunc {
@@ -86,9 +87,16 @@ func deleteMessage(
 			return
 		}
 		messageID := strings.TrimSpace(r.PathValue("id"))
-		if err := service.Delete(r.Context(), messageID); err != nil {
-			writeMessageError(w, err, logger)
-			return
+		if fileService != nil {
+			if err := fileService.DeleteMessage(r.Context(), messageID); err != nil {
+				writeFileError(w, err, logger)
+				return
+			}
+		} else {
+			if err := service.Delete(r.Context(), messageID); err != nil {
+				writeMessageError(w, err, logger)
+				return
+			}
 		}
 		publisher.Publish("message.deleted", map[string]string{"message_id": messageID})
 		w.WriteHeader(http.StatusNoContent)

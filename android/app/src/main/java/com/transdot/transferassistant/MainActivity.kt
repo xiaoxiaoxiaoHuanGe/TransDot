@@ -13,7 +13,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LifecycleStartEffect
@@ -30,6 +32,7 @@ import com.transdot.transferassistant.ui.SetupViewModel
 import com.transdot.transferassistant.ui.TimelineScreen
 import com.transdot.transferassistant.ui.TimelineViewModel
 import com.transdot.transferassistant.ui.theme.TransferAssistantTheme
+import com.transdot.transferassistant.ui.theme.ThemeMode
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -42,8 +45,14 @@ class MainActivity : ComponentActivity() {
             val factory = remember { SetupViewModel.Factory(repository, sessionStore) }
             val viewModel: SetupViewModel = viewModel(factory = factory)
             val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+            val themePreferences = remember { getSharedPreferences("appearance", MODE_PRIVATE) }
+            var themeMode by remember {
+                mutableStateOf(runCatching {
+                    ThemeMode.valueOf(themePreferences.getString("theme_mode", ThemeMode.System.name).orEmpty())
+                }.getOrDefault(ThemeMode.System))
+            }
 
-            TransferAssistantTheme {
+            TransferAssistantTheme(mode = themeMode) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
@@ -54,7 +63,14 @@ class MainActivity : ComponentActivity() {
                         label = "setup-state",
                     ) { isReady ->
                         if (isReady) {
-                            PairingContent(sessionStore)
+                            PairingContent(
+                                sessionStore = sessionStore,
+                                themeMode = themeMode,
+                                onThemeModeChange = { selected ->
+                                    themeMode = selected
+                                    themePreferences.edit().putString("theme_mode", selected.name).apply()
+                                },
+                            )
                         } else {
                             SetupScreen(
                                 state = uiState,
@@ -72,9 +88,14 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun PairingContent(sessionStore: SessionStore) {
+private fun PairingContent(
+    sessionStore: SessionStore,
+    themeMode: ThemeMode,
+    onThemeModeChange: (ThemeMode) -> Unit,
+) {
     val pairingRepository = remember { NetworkPairingRepository(allowCleartext = BuildConfig.DEBUG) }
-    val timelineRepository = remember { NetworkTimelineRepository(allowCleartext = BuildConfig.DEBUG) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val timelineRepository = remember { NetworkTimelineRepository(allowCleartext = BuildConfig.DEBUG, context = context.applicationContext) }
     val pairingFactory = remember { PairingViewModel.Factory(pairingRepository, sessionStore) }
     val timelineFactory = remember { TimelineViewModel.Factory(timelineRepository, sessionStore) }
     val pairingViewModel: PairingViewModel = viewModel(factory = pairingFactory)
@@ -91,8 +112,14 @@ private fun PairingContent(sessionStore: SessionStore) {
         TimelineScreen(
             state = timelineUiState,
             ownDeviceId = pairingUiState.deviceId,
+            themeMode = themeMode,
+            onThemeModeChange = onThemeModeChange,
             onDraftChange = timelineViewModel::updateDraft,
             onSend = timelineViewModel::sendText,
+            onUpload = timelineViewModel::uploadFiles,
+            onRetryUpload = timelineViewModel::retryUpload,
+            onDownload = timelineViewModel::download,
+            loadImage = timelineViewModel::loadImage,
             onLoadOlder = timelineViewModel::loadOlder,
             onRequestDelete = timelineViewModel::requestDelete,
             onCancelDelete = timelineViewModel::cancelDelete,

@@ -1,4 +1,4 @@
-import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ChangeEvent, ClipboardEvent, DragEvent, FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
 
 type PairingStatus = 'pending' | 'approved' | 'rejected' | 'expired' | 'consumed'
@@ -28,6 +28,48 @@ type TimelineMessage = {
   text_content: string | null
   created_at: string
   metadata_expires_at: string | null
+  file?: FileAttachment
+}
+
+type FileAttachment = {
+  id: string
+  original_filename: string
+  mime_type: string
+  size_bytes: number
+  status: 'uploading' | 'available' | 'expired' | 'failed' | 'deleted'
+  expires_at: string | null
+  expired_reason?: 'ttl' | 'capacity'
+  download_url: string
+  thumbnail_url?: string
+}
+
+type UploadTicket = {
+  file_id: string
+  upload_id: string
+  filename: string
+  mime_type: string
+  size_bytes: number
+  kind: 'image' | 'file'
+  upload_url: string
+  thumbnail_upload_url?: string
+}
+
+type UploadBatch = {
+  id: string
+  status: string
+  total_bytes: number
+  reserved_bytes: number
+  expires_at: string
+  uploads: UploadTicket[]
+}
+
+type PendingUpload = {
+  id: string
+  file: File
+  ticket: UploadTicket
+  progress: number
+  status: 'preparing' | 'uploading' | 'failed' | 'complete'
+  error?: string
 }
 
 type MessagePage = {
@@ -99,7 +141,68 @@ function mergeMessages(current: TimelineMessage[], incoming: TimelineMessage[]) 
 function isTimelineMessage(value: unknown): value is TimelineMessage {
   if (!value || typeof value !== 'object') return false
   const candidate = value as Partial<TimelineMessage>
-  return typeof candidate.id === 'string' && typeof candidate.created_at === 'string' && candidate.type === 'text'
+  return typeof candidate.id === 'string'
+    && typeof candidate.created_at === 'string'
+    && (candidate.type === 'text' || candidate.type === 'image' || candidate.type === 'file')
+}
+
+function uploadBinary<T>(path: string, body: Blob, contentType: string, onProgress?: (progress: number) => void): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('PUT', path)
+    xhr.responseType = 'json'
+    xhr.withCredentials = true
+    xhr.setRequestHeader('Accept', 'application/json')
+    xhr.setRequestHeader('Content-Type', contentType || 'application/octet-stream')
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress?.(Math.round((event.loaded / event.total) * 100))
+    }
+    xhr.onerror = () => reject(new ApiError('网络连接中断。', 0, 'NETWORK_ERROR'))
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(xhr.response as T)
+        return
+      }
+      const envelope = (xhr.response || {}) as ErrorEnvelope
+      reject(new ApiError(envelope.error?.message || `上传失败（HTTP ${xhr.status}）`, xhr.status, envelope.error?.code))
+    }
+    xhr.send(body)
+  })
+}
+
+async function createThumbnail(file: File): Promise<Blob> {
+  const bitmap = await createImageBitmap(file)
+  try {
+    const scale = Math.min(1, 720 / Math.max(bitmap.width, bitmap.height))
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale))
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale))
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('当前浏览器无法生成图片缩略图。')
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+    const thumbnail = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', .84))
+    if (!thumbnail) throw new Error('图片缩略图生成失败。')
+    return thumbnail
+  } finally {
+    bitmap.close()
+  }
+}
+
+function uploadErrorMessage(error: unknown) {
+  if (!(error instanceof ApiError)) return error instanceof Error ? error.message : '上传失败。'
+  const localized: Record<string, string> = {
+    FILE_TOO_LARGE: '单个文件不能超过 300 MB。',
+    BATCH_TOO_LARGE: '单批文件不能超过 500 MB。',
+    TOO_MANY_FILES: '一次最多选择 20 个文件。',
+    INSUFFICIENT_STORAGE: '临时文件池空间不足，请稍后重试。',
+    UPLOAD_EXPIRED: '上传会话已过期，请重新选择文件。',
+    UPLOAD_INCOMPLETE: '文件上传不完整，请重试。',
+  }
+  return error.code && localized[error.code] ? localized[error.code] : error.message
+}
+
+function isPreviewableImage(file: File) {
+  return ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/bmp'].includes(file.type.toLowerCase())
 }
 
 function App() {
@@ -244,7 +347,7 @@ function App() {
 
       <footer>
         <span>Private · Self-hosted</span>
-        <span>V1 Text Timeline</span>
+        <span>V1 Complete</span>
       </footer>
     </div>
   )
@@ -266,7 +369,13 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
   const [highlightedID, setHighlightedID] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<TimelineMessage | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [attachmentOpen, setAttachmentOpen] = useState(false)
+  const [pendingUploads, setPendingUploads] = useState<PendingUpload[]>([])
+  const [dragging, setDragging] = useState(false)
+  const [viewer, setViewer] = useState<{ images: TimelineMessage[], index: number } | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
+  const photoInputRef = useRef<HTMLInputElement | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
   const synchronizingRef = useRef(false)
   const bufferedEventsRef = useRef<RealtimeEnvelope[]>([])
 
@@ -287,6 +396,15 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
       if (typeof messageID === 'string') {
         setMessages((current) => current.filter((message) => message.id !== messageID))
         setSearchResults((current) => current.filter((message) => message.id !== messageID))
+      }
+    } else if (event.type === 'file.expired') {
+      const messageID = (event.data as { message_id?: unknown })?.message_id
+      if (typeof messageID === 'string') {
+        const expire = (values: TimelineMessage[]) => values.map((message) => message.id === messageID && message.file
+          ? { ...message, file: { ...message.file, status: 'expired' as const } }
+          : message)
+        setMessages(expire)
+        setSearchResults(expire)
       }
     } else if (event.type === 'device.replaced') {
       onSessionInvalid()
@@ -467,8 +585,108 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
 
   const draftBytes = new TextEncoder().encode(draft).length
 
+  const updatePending = useCallback((id: string, update: Partial<PendingUpload>) => {
+    setPendingUploads((current) => current.map((item) => item.id === id ? { ...item, ...update } : item))
+  }, [])
+
+  const performUpload = useCallback(async (pending: PendingUpload) => {
+    updatePending(pending.id, { status: 'preparing', progress: 0, error: undefined })
+    try {
+      if (pending.ticket.kind === 'image' && pending.ticket.thumbnail_upload_url) {
+        const thumbnail = await createThumbnail(pending.file)
+        await uploadBinary<void>(pending.ticket.thumbnail_upload_url, thumbnail, 'image/jpeg')
+      }
+      updatePending(pending.id, { status: 'uploading' })
+      const created = await uploadBinary<TimelineMessage>(
+        pending.ticket.upload_url,
+        pending.file,
+        pending.file.type || 'application/octet-stream',
+        (progress) => updatePending(pending.id, { progress }),
+      )
+      setMessages((current) => mergeMessages(current, [created]))
+      updatePending(pending.id, { status: 'complete', progress: 100 })
+      window.setTimeout(() => setPendingUploads((current) => current.filter((item) => item.id !== pending.id)), 650)
+      window.requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }))
+    } catch (error) {
+      if (handleAuthError(error)) return
+      updatePending(pending.id, { status: 'failed', error: uploadErrorMessage(error) })
+    }
+  }, [handleAuthError, updatePending])
+
+  const uploadSelectedFiles = useCallback(async (selected: File[]) => {
+    const files = selected.filter((file) => file.size >= 0).slice(0, 21)
+    if (files.length === 0) return
+    if (files.length > 20) {
+      setErrorMessage('一次最多选择 20 个文件。')
+      return
+    }
+    if (files.some((file) => file.size > 300 * 1024 * 1024)) {
+      setErrorMessage('单个文件不能超过 300 MB。')
+      return
+    }
+    if (files.reduce((total, file) => total + file.size, 0) > 500 * 1024 * 1024) {
+      setErrorMessage('单批文件不能超过 500 MB。')
+      return
+    }
+    setAttachmentOpen(false)
+    setErrorMessage('')
+    try {
+      const batch = await request<UploadBatch>('/api/v1/upload-batches', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({
+          items: files.map((file) => ({
+            filename: file.name,
+            mime_type: file.type || 'application/octet-stream',
+            size_bytes: file.size,
+            kind: isPreviewableImage(file) ? 'image' : 'file',
+          })),
+        }),
+      })
+      const pending = batch.uploads.map((ticket, index): PendingUpload => ({
+        id: ticket.upload_id, file: files[index], ticket, progress: 0, status: 'preparing',
+      }))
+      setPendingUploads((current) => [...current, ...pending])
+      for (const item of pending) await performUpload(item)
+    } catch (error) {
+      if (!handleAuthError(error)) setErrorMessage(uploadErrorMessage(error))
+    }
+  }, [handleAuthError, performUpload])
+
+  const handleFileInput = (event: ChangeEvent<HTMLInputElement>) => {
+    const selected = Array.from(event.target.files || [])
+    event.target.value = ''
+    void uploadSelectedFiles(selected)
+  }
+
+  const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
+    const images = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null)
+    if (images.length === 0) return
+    event.preventDefault()
+    void uploadSelectedFiles(images)
+  }
+
+  const handleDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    setDragging(false)
+    const files = Array.from(event.dataTransfer.files)
+    if (files.length > 0) void uploadSelectedFiles(files)
+  }
+
+  const groupedMessages = useMemo(() => groupTimelineMessages(messages), [messages])
+
   return (
-    <div className="timeline-shell">
+    <div
+      className="timeline-shell"
+      onPaste={handlePaste}
+      onDragEnter={(event) => { event.preventDefault(); setDragging(true) }}
+      onDragOver={(event) => event.preventDefault()}
+      onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false) }}
+      onDrop={handleDrop}
+    >
       <header className="timeline-topbar">
         <div className="timeline-heading">
           <Brand />
@@ -496,33 +714,42 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
           )}
           {initialLoading ? (
             <div className="timeline-placeholder"><span className="spinner" /><p>正在同步时间线</p></div>
-          ) : messages.length === 0 ? (
+          ) : messages.length === 0 && pendingUploads.length === 0 ? (
             <div className="timeline-placeholder timeline-placeholder--empty">
-              <span className="empty-mark">Aa</span>
-              <h2>从第一条文字开始</h2>
-              <p>这里会保留文字消息；文件将在下一阶段加入。</p>
+              <span className="empty-mark">↗</span>
+              <h2>发送第一条内容</h2>
+              <p>输入文字、选择文件，或把文件拖到此处。</p>
             </div>
           ) : (
             <div className="message-stack">
-              {messages.map((message) => {
+              {groupedMessages.map((group) => {
+                const message = group.messages[0]
                 const own = message.source_device_id === authSession.device_id
                 return (
                   <article
                     id={`message-${message.id}`}
-                    key={message.id}
-                    className={`message-row ${own ? 'message-row--own' : ''} ${highlightedID === message.id ? 'message-row--highlighted' : ''}`}
+                    key={group.key}
+                    className={`message-row ${group.kind === 'images' ? 'message-row--images' : ''} ${own ? 'message-row--own' : ''} ${group.messages.some((item) => highlightedID === item.id) ? 'message-row--highlighted' : ''}`}
                   >
                     <div className="message-meta">
                       <span>{message.source_device_type === 'android_master' ? 'Android' : 'Windows'}</span>
                       <time dateTime={message.created_at}>{formatMessageTime(message.created_at)}</time>
                     </div>
-                    <div className="message-bubble">
-                      <p>{message.text_content}</p>
-                      <button type="button" onClick={() => setDeleteTarget(message)}>删除</button>
-                    </div>
+                    {group.kind === 'images' ? (
+                      <ImageGrid
+                        messages={group.messages}
+                        onOpen={(index) => setViewer({ images: group.messages, index })}
+                        onDelete={setDeleteTarget}
+                      />
+                    ) : (
+                      <MessageCard message={message} onDelete={() => setDeleteTarget(message)} onOpenImage={() => setViewer({ images: [message], index: 0 })} />
+                    )}
                   </article>
                 )
               })}
+              {pendingUploads.map((upload) => (
+                <PendingUploadCard key={upload.id} upload={upload} onRetry={() => void performUpload(upload)} />
+              ))}
             </div>
           )}
           <div ref={bottomRef} />
@@ -532,7 +759,7 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
       <div className="composer-region">
         {errorMessage && <div className="inline-error" role="alert">{errorMessage}</div>}
         <div className="composer">
-          <button className="attachment-button" type="button" disabled title="文件功能将在下一阶段开放">＋</button>
+          <button className="attachment-button" type="button" onClick={() => setAttachmentOpen(true)} title="添加照片或文件">＋</button>
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -555,11 +782,32 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
         </div>
       </div>
 
+      <input ref={photoInputRef} className="visually-hidden" type="file" accept="image/*" multiple onChange={handleFileInput} />
+      <input ref={fileInputRef} className="visually-hidden" type="file" multiple onChange={handleFileInput} />
+
+      {dragging && (
+        <div className="drop-zone" aria-hidden="true">
+          <div><strong>松开即可上传</strong><span>最多 20 项 · 单批 500 MB</span></div>
+        </div>
+      )}
+
+      {attachmentOpen && (
+        <div className="sheet-backdrop sheet-backdrop--center" role="presentation" onMouseDown={() => setAttachmentOpen(false)}>
+          <div className="attachment-sheet" role="dialog" aria-modal="true" aria-label="添加内容" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="sheet-header"><div><p className="eyebrow">ADD CONTENT</p><h2>发送到 Android</h2></div><button className="icon-button" type="button" onClick={() => setAttachmentOpen(false)}>×</button></div>
+            <div className="attachment-options">
+              <button type="button" onClick={() => photoInputRef.current?.click()}><span>▧</span><strong>照片</strong><small>最多 20 张，原图不压缩</small></button>
+              <button type="button" onClick={() => fileInputRef.current?.click()}><span>⌑</span><strong>文件</strong><small>单个文件最大 300 MB</small></button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {searchOpen && (
         <div className="sheet-backdrop" role="presentation" onMouseDown={() => setSearchOpen(false)}>
           <aside className="search-sheet" role="dialog" aria-modal="true" aria-label="搜索消息" onMouseDown={(event) => event.stopPropagation()}>
             <div className="sheet-header">
-              <div><p className="eyebrow">FTS5 SEARCH</p><h2>搜索文字消息</h2></div>
+              <div><p className="eyebrow">FTS5 SEARCH</p><h2>搜索消息与文件名</h2></div>
               <button className="icon-button" type="button" onClick={() => setSearchOpen(false)} aria-label="关闭搜索">×</button>
             </div>
             <form className="search-form" onSubmit={(event) => void submitSearch(event)}>
@@ -571,7 +819,7 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
                 <p className="search-empty">输入关键词搜索最多 50 条结果。</p>
               ) : searchResults.map((message) => (
                 <button key={message.id} className="search-result" type="button" onClick={() => void locateSearchResult(message.id)}>
-                  <span>{message.text_content}</span>
+                  <span>{message.text_content || message.file?.original_filename || '文件消息'}</span>
                   <small>{message.source_device_type === 'android_master' ? 'Android' : 'Windows'} · {formatMessageTime(message.created_at)}</small>
                 </button>
               ))}
@@ -584,7 +832,7 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
         <div className="sheet-backdrop sheet-backdrop--center" role="presentation">
           <div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-title">
             <h2 id="delete-title">删除这条消息？</h2>
-            <p>删除会同步到 Android，并从全文搜索索引中移除。</p>
+            <p>{deleteTarget.type === 'text' ? '删除会同步到 Android，并从全文搜索索引中移除。' : '删除会同步移除消息、原文件和缩略图，此操作无法撤销。'}</p>
             <div>
               <button type="button" onClick={() => setDeleteTarget(null)} disabled={deleting}>取消</button>
               <button className="danger-button" type="button" onClick={() => void confirmDelete()} disabled={deleting}>{deleting ? '删除中' : '删除'}</button>
@@ -592,8 +840,130 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
           </div>
         </div>
       )}
+
+      {viewer && (
+        <ImageViewer
+          images={viewer.images}
+          index={viewer.index}
+          onIndexChange={(index) => setViewer((current) => current ? { ...current, index } : null)}
+          onClose={() => setViewer(null)}
+        />
+      )}
     </div>
   )
+}
+
+type TimelineGroup = { key: string, kind: 'single' | 'images', messages: TimelineMessage[] }
+
+function groupTimelineMessages(messages: TimelineMessage[]): TimelineGroup[] {
+  const groups: TimelineGroup[] = []
+  for (const message of messages) {
+    const previous = groups.at(-1)
+    if (message.type === 'image' && message.batch_id && previous?.kind === 'images'
+      && previous.messages[0].batch_id === message.batch_id
+      && previous.messages[0].source_device_id === message.source_device_id) {
+      previous.messages.push(message)
+    } else {
+      groups.push({
+        key: message.type === 'image' && message.batch_id ? `batch-${message.batch_id}` : message.id,
+        kind: message.type === 'image' ? 'images' : 'single',
+        messages: [message],
+      })
+    }
+  }
+  return groups
+}
+
+function MessageCard({ message, onDelete, onOpenImage }: { message: TimelineMessage, onDelete: () => void, onOpenImage: () => void }) {
+  if (message.type === 'text') {
+    return <div className="message-bubble"><p>{message.text_content}</p><button type="button" onClick={onDelete}>删除</button></div>
+  }
+  if (message.type === 'image') {
+    return <ImageGrid messages={[message]} onOpen={onOpenImage} onDelete={() => onDelete()} />
+  }
+  const file = message.file
+  return (
+    <div className="file-card">
+      <span className="file-icon">{fileExtension(file?.original_filename || '')}</span>
+      <div className="file-copy"><strong title={file?.original_filename}>{file?.original_filename || '文件'}</strong><span>{formatBytes(file?.size_bytes || 0)} · {fileStatusLabel(file)}</span></div>
+      {file?.status === 'available' ? <a className="file-action" href={file.download_url} download>下载</a> : <span className="file-action file-action--disabled">已过期</span>}
+      <button className="card-delete" type="button" onClick={onDelete} aria-label="删除文件消息">删除</button>
+    </div>
+  )
+}
+
+function ImageGrid({ messages, onOpen, onDelete }: { messages: TimelineMessage[], onOpen: (index: number) => void, onDelete: (message: TimelineMessage) => void }) {
+  const visible = messages.slice(0, 6)
+  return (
+    <div className={`image-grid image-grid--${Math.min(messages.length, 5)}`}>
+      {visible.map((message, index) => {
+        const file = message.file
+        const expired = file?.status !== 'available'
+        return (
+          <div className="image-tile" key={message.id}>
+            <button type="button" onClick={() => onOpen(index)} disabled={!file?.thumbnail_url && expired}>
+              {file?.thumbnail_url ? <img src={file.thumbnail_url} alt={file.original_filename} loading="lazy" /> : <span className="image-placeholder">IMG</span>}
+              {expired && <span className="image-expired">原图已过期</span>}
+              {index === 5 && messages.length > 6 && <span className="image-more">+{messages.length - 5}</span>}
+            </button>
+            <button className="image-delete" type="button" onClick={() => onDelete(message)} aria-label={`删除 ${file?.original_filename || '图片'}`}>×</button>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function PendingUploadCard({ upload, onRetry }: { upload: PendingUpload, onRetry: () => void }) {
+  return (
+    <article className="pending-card">
+      <div className="pending-head"><span className="file-icon">{upload.ticket.kind === 'image' ? 'IMG' : fileExtension(upload.file.name)}</span><div><strong>{upload.file.name}</strong><span>{formatBytes(upload.file.size)}</span></div></div>
+      <div className="upload-progress"><span style={{ width: `${upload.progress}%` }} /></div>
+      <div className="pending-state"><span>{upload.status === 'preparing' ? '准备缩略图…' : upload.status === 'uploading' ? `上传中 ${upload.progress}%` : upload.status === 'complete' ? '上传完成' : upload.error || '上传失败'}</span>{upload.status === 'failed' && <button type="button" onClick={onRetry}>重试</button>}</div>
+    </article>
+  )
+}
+
+function ImageViewer({ images, index, onIndexChange, onClose }: { images: TimelineMessage[], index: number, onIndexChange: (index: number) => void, onClose: () => void }) {
+  const message = images[index]
+  const file = message.file
+  useEffect(() => {
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+      if (event.key === 'ArrowLeft') onIndexChange(Math.max(0, index - 1))
+      if (event.key === 'ArrowRight') onIndexChange(Math.min(images.length - 1, index + 1))
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [images.length, index, onClose, onIndexChange])
+  return (
+    <div className="viewer" role="dialog" aria-modal="true" aria-label="图片查看器">
+      <header><button type="button" onClick={onClose}>← 返回</button><span>{index + 1} / {images.length}</span>{file?.status === 'available' ? <a href={file.download_url} download>下载原图</a> : <span>原图已过期</span>}</header>
+      <div className="viewer-stage">
+        {file?.status === 'available' ? <img src={file.download_url} alt={file.original_filename} /> : file?.thumbnail_url ? <img className="viewer-expired" src={file.thumbnail_url} alt={file.original_filename} /> : <p>图片已不可用</p>}
+      </div>
+      {images.length > 1 && <><button className="viewer-nav viewer-nav--left" type="button" disabled={index === 0} onClick={() => onIndexChange(index - 1)}>‹</button><button className="viewer-nav viewer-nav--right" type="button" disabled={index === images.length - 1} onClick={() => onIndexChange(index + 1)}>›</button></>}
+      <footer>{file?.original_filename}</footer>
+    </div>
+  )
+}
+
+function fileExtension(filename: string) {
+  const extension = filename.split('.').at(-1)?.toUpperCase() || 'FILE'
+  return extension.length <= 5 ? extension : 'FILE'
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 ** 2).toFixed(1)} MB`
+}
+
+function fileStatusLabel(file?: FileAttachment) {
+  if (!file || file.status !== 'available') return '已过期'
+  if (!file.expires_at) return '可下载'
+  const hours = Math.max(0, Math.ceil((new Date(file.expires_at).getTime() - Date.now()) / 3_600_000))
+  return `${hours} 小时后过期`
 }
 
 function Brand() {

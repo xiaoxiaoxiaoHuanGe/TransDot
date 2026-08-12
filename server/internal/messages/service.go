@@ -17,6 +17,8 @@ import (
 
 const (
 	TypeText        = "text"
+	TypeImage       = "image"
+	TypeFile        = "file"
 	DefaultLimit    = 50
 	MaximumLimit    = 50
 	MaximumTextLen  = 100 * 1024
@@ -33,14 +35,27 @@ var (
 )
 
 type Message struct {
-	ID                string     `json:"id"`
-	Type              string     `json:"type"`
-	BatchID           *string    `json:"batch_id"`
-	SourceDeviceID    string     `json:"source_device_id"`
-	SourceDeviceType  string     `json:"source_device_type"`
-	TextContent       *string    `json:"text_content"`
-	CreatedAt         time.Time  `json:"created_at"`
-	MetadataExpiresAt *time.Time `json:"metadata_expires_at"`
+	ID                string      `json:"id"`
+	Type              string      `json:"type"`
+	BatchID           *string     `json:"batch_id"`
+	SourceDeviceID    string      `json:"source_device_id"`
+	SourceDeviceType  string      `json:"source_device_type"`
+	TextContent       *string     `json:"text_content"`
+	CreatedAt         time.Time   `json:"created_at"`
+	MetadataExpiresAt *time.Time  `json:"metadata_expires_at"`
+	File              *Attachment `json:"file,omitempty"`
+}
+
+type Attachment struct {
+	ID               string     `json:"id"`
+	OriginalFilename string     `json:"original_filename"`
+	MIMEType         string     `json:"mime_type"`
+	SizeBytes        int64      `json:"size_bytes"`
+	Status           string     `json:"status"`
+	ExpiresAt        *time.Time `json:"expires_at"`
+	ExpiredReason    *string    `json:"expired_reason,omitempty"`
+	DownloadURL      string     `json:"download_url"`
+	ThumbnailURL     string     `json:"thumbnail_url,omitempty"`
 }
 
 type Page struct {
@@ -122,9 +137,12 @@ func (s *Service) List(ctx context.Context, before string, limit int) (Page, err
 
 	query := `
 		SELECT m.id, m.type, m.batch_id, m.source_device_id, d.device_type,
-		       m.text_content, m.created_at, m.metadata_expires_at
+		       m.text_content, m.created_at, m.metadata_expires_at,
+		       f.id, f.original_filename, f.mime_type, f.size_bytes, f.status,
+		       f.expires_at, f.expired_reason, f.thumbnail_key
 		FROM messages m
 		JOIN devices d ON d.id = m.source_device_id
+		LEFT JOIN files f ON f.message_id = m.id
 		WHERE m.deleted_at IS NULL`
 	arguments := make([]any, 0, 3)
 	if strings.TrimSpace(before) != "" {
@@ -200,10 +218,13 @@ func (s *Service) Search(ctx context.Context, queryText string) ([]Message, erro
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT m.id, m.type, m.batch_id, m.source_device_id, d.device_type,
-		       m.text_content, m.created_at, m.metadata_expires_at
+		       m.text_content, m.created_at, m.metadata_expires_at,
+		       f.id, f.original_filename, f.mime_type, f.size_bytes, f.status,
+		       f.expires_at, f.expired_reason, f.thumbnail_key
 		FROM message_search_fts
 		JOIN messages m ON m.id = message_search_fts.message_id
 		JOIN devices d ON d.id = m.source_device_id
+		LEFT JOIN files f ON f.message_id = m.id
 		WHERE message_search_fts MATCH ? AND m.deleted_at IS NULL
 		ORDER BY bm25(message_search_fts), m.created_at DESC, m.id DESC
 		LIMIT 50
@@ -223,8 +244,11 @@ func (s *Service) Context(ctx context.Context, messageID string) (Context, error
 
 	beforeRows, err := s.db.QueryContext(ctx, `
 		SELECT m.id, m.type, m.batch_id, m.source_device_id, d.device_type,
-		       m.text_content, m.created_at, m.metadata_expires_at
+		       m.text_content, m.created_at, m.metadata_expires_at,
+		       f.id, f.original_filename, f.mime_type, f.size_bytes, f.status,
+		       f.expires_at, f.expired_reason, f.thumbnail_key
 		FROM messages m JOIN devices d ON d.id = m.source_device_id
+		LEFT JOIN files f ON f.message_id = m.id
 		WHERE m.deleted_at IS NULL
 		  AND (m.created_at < ? OR (m.created_at = ? AND m.id < ?))
 		ORDER BY m.created_at DESC, m.id DESC LIMIT 20
@@ -240,8 +264,11 @@ func (s *Service) Context(ctx context.Context, messageID string) (Context, error
 
 	afterRows, err := s.db.QueryContext(ctx, `
 		SELECT m.id, m.type, m.batch_id, m.source_device_id, d.device_type,
-		       m.text_content, m.created_at, m.metadata_expires_at
+		       m.text_content, m.created_at, m.metadata_expires_at,
+		       f.id, f.original_filename, f.mime_type, f.size_bytes, f.status,
+		       f.expires_at, f.expired_reason, f.thumbnail_key
 		FROM messages m JOIN devices d ON d.id = m.source_device_id
+		LEFT JOIN files f ON f.message_id = m.id
 		WHERE m.deleted_at IS NULL
 		  AND (m.created_at > ? OR (m.created_at = ? AND m.id > ?))
 		ORDER BY m.created_at ASC, m.id ASC LIMIT 20
@@ -263,8 +290,11 @@ func (s *Service) Context(ctx context.Context, messageID string) (Context, error
 func (s *Service) messageByID(ctx context.Context, messageID string) (Message, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT m.id, m.type, m.batch_id, m.source_device_id, d.device_type,
-		       m.text_content, m.created_at, m.metadata_expires_at
+		       m.text_content, m.created_at, m.metadata_expires_at,
+		       f.id, f.original_filename, f.mime_type, f.size_bytes, f.status,
+		       f.expires_at, f.expired_reason, f.thumbnail_key
 		FROM messages m JOIN devices d ON d.id = m.source_device_id
+		LEFT JOIN files f ON f.message_id = m.id
 		WHERE m.id = ? AND m.deleted_at IS NULL
 	`, messageID)
 	message, err := scanMessage(row.Scan)
@@ -277,13 +307,20 @@ func (s *Service) messageByID(ctx context.Context, messageID string) (Message, e
 	return message, nil
 }
 
+func (s *Service) Get(ctx context.Context, messageID string) (Message, error) {
+	return s.messageByID(ctx, messageID)
+}
+
 func scanMessage(scan func(...any) error) (Message, error) {
 	var message Message
 	var batchID, textContent, metadataExpiresAt sql.NullString
+	var fileID, filename, mimeType, fileStatus, fileExpiresAt, expiredReason, thumbnailKey sql.NullString
+	var fileSize sql.NullInt64
 	var createdAtRaw string
 	if err := scan(
 		&message.ID, &message.Type, &batchID, &message.SourceDeviceID,
 		&message.SourceDeviceType, &textContent, &createdAtRaw, &metadataExpiresAt,
+		&fileID, &filename, &mimeType, &fileSize, &fileStatus, &fileExpiresAt, &expiredReason, &thumbnailKey,
 	); err != nil {
 		return Message{}, err
 	}
@@ -304,6 +341,27 @@ func scanMessage(scan func(...any) error) (Message, error) {
 			return Message{}, fmt.Errorf("parse message metadata_expires_at: %w", err)
 		}
 		message.MetadataExpiresAt = &parsed
+	}
+	if fileID.Valid {
+		attachment := &Attachment{
+			ID: fileID.String, OriginalFilename: filename.String, MIMEType: mimeType.String,
+			SizeBytes: fileSize.Int64, Status: fileStatus.String,
+			DownloadURL: "/api/v1/files/" + fileID.String + "/download",
+		}
+		if fileExpiresAt.Valid {
+			parsed, err := time.Parse(time.RFC3339Nano, fileExpiresAt.String)
+			if err != nil {
+				return Message{}, fmt.Errorf("parse file expires_at: %w", err)
+			}
+			attachment.ExpiresAt = &parsed
+		}
+		if expiredReason.Valid {
+			attachment.ExpiredReason = &expiredReason.String
+		}
+		if thumbnailKey.Valid {
+			attachment.ThumbnailURL = "/api/v1/files/" + fileID.String + "/thumbnail"
+		}
+		message.File = attachment
 	}
 	return message, nil
 }

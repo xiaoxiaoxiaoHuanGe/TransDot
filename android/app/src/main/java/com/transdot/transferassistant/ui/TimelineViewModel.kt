@@ -1,5 +1,7 @@
 package com.transdot.transferassistant.ui
 
+import android.graphics.Bitmap
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -12,6 +14,7 @@ import com.transdot.transferassistant.data.TimelineFailure
 import com.transdot.transferassistant.data.TimelineMessage
 import com.transdot.transferassistant.data.TimelineRealtimeListener
 import com.transdot.transferassistant.data.TimelineRepository
+import com.transdot.transferassistant.data.UploadProgress
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,6 +46,11 @@ data class TimelineUiState(
     val deleteTarget: TimelineMessage? = null,
     val isDeleting: Boolean = false,
     val credentialInvalid: Boolean = false,
+    val uploads: List<UploadProgress> = emptyList(),
+    val isUploading: Boolean = false,
+    val retryUploadUris: List<Uri> = emptyList(),
+    val downloadMessageId: String? = null,
+    val downloadProgress: Float? = null,
 )
 
 class TimelineViewModel(
@@ -107,6 +115,64 @@ class TimelineViewModel(
                 }
                 .onFailure { failure -> handleFailure(failure) { it.copy(isSending = false) } }
         }
+    }
+
+    fun uploadFiles(uris: List<Uri>) {
+        val activeSession = session ?: return
+        if (uris.isEmpty() || mutableUiState.value.isUploading) return
+        mutableUiState.update {
+            it.copy(isUploading = true, uploads = emptyList(), retryUploadUris = uris, errorMessage = null)
+        }
+        viewModelScope.launch {
+            runCatching {
+                repository.upload(activeSession, uris) { progress ->
+                    mutableUiState.update { state ->
+                        state.copy(uploads = (state.uploads.filterNot { it.uploadId == progress.uploadId } + progress))
+                    }
+                }
+            }.onSuccess { created ->
+                mutableUiState.update {
+                    it.copy(
+                        messages = mergeMessages(it.messages, created),
+                        isUploading = false,
+                        retryUploadUris = emptyList(),
+                    )
+                }
+                delay(700)
+                mutableUiState.update { it.copy(uploads = emptyList()) }
+            }.onFailure { failure ->
+                handleFailure(failure) { it.copy(isUploading = false) }
+            }
+        }
+    }
+
+    fun retryUpload() {
+        val uris = mutableUiState.value.retryUploadUris
+        if (uris.isNotEmpty()) uploadFiles(uris)
+    }
+
+    fun download(message: TimelineMessage, destination: Uri) {
+        val activeSession = session ?: return
+        if (mutableUiState.value.downloadMessageId != null) return
+        mutableUiState.update { it.copy(downloadMessageId = message.id, downloadProgress = 0f, errorMessage = null) }
+        viewModelScope.launch {
+            runCatching {
+                repository.download(activeSession, message, destination) { copied, total ->
+                    mutableUiState.update { state ->
+                        state.copy(downloadProgress = if (total > 0) copied.toFloat() / total else null)
+                    }
+                }
+            }.onSuccess {
+                mutableUiState.update { it.copy(downloadMessageId = null, downloadProgress = null) }
+            }.onFailure { failure ->
+                handleFailure(failure) { it.copy(downloadMessageId = null, downloadProgress = null) }
+            }
+        }
+    }
+
+    suspend fun loadImage(message: TimelineMessage, original: Boolean): Bitmap? {
+        val activeSession = session ?: return null
+        return runCatching { repository.loadImage(activeSession, message, original) }.getOrNull()
     }
 
     fun loadOlder() {
@@ -298,6 +364,13 @@ class TimelineViewModel(
                     searchResults = it.searchResults.filterNot { message -> message.id == event.messageId },
                 )
             }
+            is TimelineEvent.FileExpired -> mutableUiState.update { state ->
+                state.copy(messages = state.messages.map { message ->
+                    if (message.id == event.messageId && message.file != null) {
+                        message.copy(file = message.file.copy(status = "expired", expiredReason = "ttl"))
+                    } else message
+                })
+            }
             TimelineEvent.DeviceReplaced -> markCredentialInvalid("此设备已被替换。")
             TimelineEvent.Unknown -> Unit
         }
@@ -328,6 +401,9 @@ class TimelineViewModel(
                 isLoadingOlder = false,
                 isSearching = false,
                 isDeleting = false,
+                isUploading = false,
+                downloadMessageId = null,
+                downloadProgress = null,
             )
         }
     }
