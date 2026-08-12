@@ -1,6 +1,6 @@
 # 私人文件传输助手
 
-这是《私人文件传输助手 V1 — 技术设计冻结规范》的实现工程。当前已完成 Task 01 基线、Task 02 首次初始化与 Task 03 Windows 配对闭环：
+这是《私人文件传输助手 V1 — 技术设计冻结规范》的实现工程。当前已完成 Task 01–05，包括基础框架、首次初始化、Windows 配对与完整文字消息系统：
 
 - Go HTTP 服务
 - SQLite migration 基础
@@ -14,8 +14,13 @@
 - Master Token 的服务端 SHA-256 存储与 Android Keystore 加密存储
 - Windows 二维码/6 位码配对与 HttpOnly Cookie 鉴权
 - 单一有效 Windows 及经 Android 确认的原子替换
+- SQLite 文字时间线与稳定游标分页（单页最多 50 条）
+- Android Bearer Token / Web HttpOnly Cookie 双端消息鉴权
+- 认证 WebSocket 实时创建、删除与设备替换事件
+- SQLite FTS5 全文搜索与目标消息前后各 20 条上下文定位
+- Web 与 Android 文字发送、删除、搜索、定位及断线 REST 重同步 UI
 
-消息、认证 WebSocket 与文件传输将在后续任务中实现。
+文件、图片、缩略图和上传将在后续任务中实现。
 
 ## 启动
 
@@ -44,6 +49,8 @@ docker compose down
 首次启动 Android 调试包后，填写电脑局域网地址（例如 `http://192.168.1.10:5757`）及本地 `.env` 中的 `OWNER_SETUP_TOKEN`。Claim 只允许成功一次；卸载应用丢失 Master Token 后，V1 不提供账号恢复。
 
 初始化完成后，在 Windows 打开 Web 页面即可看到两分钟有效的二维码和 6 位备用码。Android 点击“配对 Windows”扫码或手输确认；若已有 Windows，必须在手机上明确确认替换。Browser Token 只写入 `HttpOnly + Secure + SameSite=Strict` Cookie。
+
+配对完成后 Web 与 Android 均进入文字时间线。WebSocket 只负责实时通知；首次进入、重新连接和 App 回到前台时均以 `GET /api/v1/messages` 重新同步 SQLite 状态。
 
 ## 本地 Web 开发
 

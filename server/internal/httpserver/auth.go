@@ -29,9 +29,37 @@ func browserSession(authService deviceAuthenticator, logger *slog.Logger) http.H
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"authenticated": true,
+			"device_id":     device.ID,
 			"device_type":   device.Type,
 		})
 	}
+}
+
+func authenticateDevice(w http.ResponseWriter, r *http.Request, authService deviceAuthenticator, logger *slog.Logger) (deviceauth.Device, bool) {
+	header := strings.TrimSpace(r.Header.Get("Authorization"))
+	if header != "" {
+		scheme, token, found := strings.Cut(header, " ")
+		if !found || !strings.EqualFold(scheme, "Bearer") || strings.TrimSpace(token) == "" {
+			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication is required.")
+			return deviceauth.Device{}, false
+		}
+		device, err := authService.Authenticate(r.Context(), strings.TrimSpace(token), deviceauth.AndroidMaster)
+		if !handleAuthenticationError(w, err, logger) {
+			return deviceauth.Device{}, false
+		}
+		return device, true
+	}
+
+	cookie, err := r.Cookie(browserCookieName)
+	if err != nil || strings.TrimSpace(cookie.Value) == "" {
+		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication is required.")
+		return deviceauth.Device{}, false
+	}
+	device, err := authService.Authenticate(r.Context(), cookie.Value, deviceauth.WindowsBrowser)
+	if !handleAuthenticationError(w, err, logger) {
+		return deviceauth.Device{}, false
+	}
+	return device, true
 }
 
 func authenticateMaster(w http.ResponseWriter, r *http.Request, authService deviceAuthenticator, logger *slog.Logger) (deviceauth.Device, bool) {

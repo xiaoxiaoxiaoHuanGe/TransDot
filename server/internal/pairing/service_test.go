@@ -53,12 +53,20 @@ func TestPairingApprovalCreatesAuthenticatedBrowser(t *testing.T) {
 
 func TestPairingReplacementRevokesOldBrowserAtomically(t *testing.T) {
 	db := testDatabaseWithMaster(t)
-	service := NewService(db, 2*time.Minute)
+	var revokedDeviceIDs []string
+	service := NewService(db, 2*time.Minute, func(deviceIDs []string) {
+		revokedDeviceIDs = append(revokedDeviceIDs, deviceIDs...)
+	})
 	ctx := context.Background()
 
 	first := createAndApprove(t, service, false)
 	if _, err := service.Poll(ctx, first.ID, first.BrowserToken); err != nil {
 		t.Fatalf("consume first browser: %v", err)
+	}
+	authService := deviceauth.NewService(db)
+	oldDevice, err := authService.Authenticate(ctx, first.BrowserToken, deviceauth.WindowsBrowser)
+	if err != nil {
+		t.Fatalf("authenticate first browser before replacement: %v", err)
 	}
 
 	second, err := service.Create(ctx)
@@ -76,9 +84,9 @@ func TestPairingReplacementRevokesOldBrowserAtomically(t *testing.T) {
 		t.Fatalf("consume replacement browser: %v", err)
 	}
 
-	authService := deviceauth.NewService(db)
-	if _, err := authService.Authenticate(ctx, first.BrowserToken, deviceauth.WindowsBrowser); !errors.Is(err, deviceauth.ErrDeviceRevoked) {
-		t.Fatalf("old browser auth error = %v, want revoked", err)
+	_, oldDeviceErr := authService.Authenticate(ctx, first.BrowserToken, deviceauth.WindowsBrowser)
+	if !errors.Is(oldDeviceErr, deviceauth.ErrDeviceRevoked) {
+		t.Fatalf("old browser auth error = %v, want revoked", oldDeviceErr)
 	}
 	if _, err := authService.Authenticate(ctx, second.BrowserToken, deviceauth.WindowsBrowser); err != nil {
 		t.Fatalf("new browser auth error = %v", err)
@@ -93,6 +101,9 @@ func TestPairingReplacementRevokesOldBrowserAtomically(t *testing.T) {
 	}
 	if activeBrowsers != 1 {
 		t.Fatalf("active browser count = %d, want 1", activeBrowsers)
+	}
+	if len(revokedDeviceIDs) != 1 || revokedDeviceIDs[0] != oldDevice.ID {
+		t.Fatalf("revoked notification = %v, want [%s]", revokedDeviceIDs, oldDevice.ID)
 	}
 }
 

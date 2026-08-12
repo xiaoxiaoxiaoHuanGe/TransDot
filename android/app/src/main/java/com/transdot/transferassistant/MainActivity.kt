@@ -16,15 +16,19 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.transdot.transferassistant.data.NetworkSetupRepository
 import com.transdot.transferassistant.data.NetworkPairingRepository
+import com.transdot.transferassistant.data.NetworkTimelineRepository
 import com.transdot.transferassistant.data.SecureSessionStore
 import com.transdot.transferassistant.data.SessionStore
 import com.transdot.transferassistant.ui.PairingFlow
 import com.transdot.transferassistant.ui.PairingViewModel
 import com.transdot.transferassistant.ui.SetupScreen
 import com.transdot.transferassistant.ui.SetupViewModel
+import com.transdot.transferassistant.ui.TimelineScreen
+import com.transdot.transferassistant.ui.TimelineViewModel
 import com.transdot.transferassistant.ui.theme.TransferAssistantTheme
 
 class MainActivity : ComponentActivity() {
@@ -69,21 +73,51 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun PairingContent(sessionStore: SessionStore) {
-    val repository = remember { NetworkPairingRepository(allowCleartext = BuildConfig.DEBUG) }
-    val factory = remember { PairingViewModel.Factory(repository, sessionStore) }
-    val pairingViewModel: PairingViewModel = viewModel(factory = factory)
+    val pairingRepository = remember { NetworkPairingRepository(allowCleartext = BuildConfig.DEBUG) }
+    val timelineRepository = remember { NetworkTimelineRepository(allowCleartext = BuildConfig.DEBUG) }
+    val pairingFactory = remember { PairingViewModel.Factory(pairingRepository, sessionStore) }
+    val timelineFactory = remember { TimelineViewModel.Factory(timelineRepository, sessionStore) }
+    val pairingViewModel: PairingViewModel = viewModel(factory = pairingFactory)
+    val timelineViewModel: TimelineViewModel = viewModel(factory = timelineFactory)
     val pairingUiState by pairingViewModel.uiState.collectAsStateWithLifecycle()
+    val timelineUiState by timelineViewModel.uiState.collectAsStateWithLifecycle()
 
-    PairingFlow(
-        state = pairingUiState,
-        onOpenScanner = pairingViewModel::openScanner,
-        onOpenManual = pairingViewModel::openManual,
-        onBack = pairingViewModel::returnHome,
-        onCodeChange = pairingViewModel::updateManualCode,
-        onSubmitCode = pairingViewModel::submitManualCode,
-        onQRCode = pairingViewModel::onQRCodeScanned,
-        onScannerError = pairingViewModel::reportScannerError,
-        onConfirmReplacement = pairingViewModel::confirmReplacement,
-        onCancelReplacement = pairingViewModel::cancelReplacement,
-    )
+    LifecycleStartEffect(timelineViewModel) {
+        timelineViewModel.start()
+        onStopOrDispose { timelineViewModel.stop() }
+    }
+
+    if (pairingUiState.screen == com.transdot.transferassistant.ui.PairingScreen.Home) {
+        TimelineScreen(
+            state = timelineUiState,
+            ownDeviceId = pairingUiState.deviceId,
+            onDraftChange = timelineViewModel::updateDraft,
+            onSend = timelineViewModel::sendText,
+            onLoadOlder = timelineViewModel::loadOlder,
+            onRequestDelete = timelineViewModel::requestDelete,
+            onCancelDelete = timelineViewModel::cancelDelete,
+            onConfirmDelete = timelineViewModel::confirmDelete,
+            onOpenSearch = timelineViewModel::openSearch,
+            onCloseSearch = timelineViewModel::closeSearch,
+            onSearchQueryChange = timelineViewModel::updateSearchQuery,
+            onSearch = timelineViewModel::search,
+            onLocate = timelineViewModel::locate,
+            onClearHighlight = timelineViewModel::clearHighlight,
+            onClearError = timelineViewModel::clearError,
+            onPairWindows = pairingViewModel::openScanner,
+        )
+    } else {
+        PairingFlow(
+            state = pairingUiState,
+            onOpenScanner = pairingViewModel::openScanner,
+            onOpenManual = pairingViewModel::openManual,
+            onBack = pairingViewModel::returnHome,
+            onCodeChange = pairingViewModel::updateManualCode,
+            onSubmitCode = pairingViewModel::submitManualCode,
+            onQRCode = pairingViewModel::onQRCodeScanned,
+            onScannerError = pairingViewModel::reportScannerError,
+            onConfirmReplacement = pairingViewModel::confirmReplacement,
+            onCancelReplacement = pairingViewModel::cancelReplacement,
+        )
+    }
 }

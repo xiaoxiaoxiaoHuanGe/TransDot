@@ -14,7 +14,9 @@ import (
 	"transdot.local/transfer-assistant/server/internal/database"
 	"transdot.local/transfer-assistant/server/internal/deviceauth"
 	"transdot.local/transfer-assistant/server/internal/httpserver"
+	"transdot.local/transfer-assistant/server/internal/messages"
 	"transdot.local/transfer-assistant/server/internal/pairing"
+	"transdot.local/transfer-assistant/server/internal/realtime"
 	"transdot.local/transfer-assistant/server/internal/setup"
 	"transdot.local/transfer-assistant/server/internal/webui"
 )
@@ -36,7 +38,9 @@ func main() {
 	defer db.Close()
 	setupService := setup.NewService(db, cfg.OwnerSetupToken)
 	authService := deviceauth.NewService(db)
-	pairingService := pairing.NewService(db, cfg.PairingTTL)
+	hub := realtime.NewHub()
+	pairingService := pairing.NewService(db, cfg.PairingTTL, hub.RevokeDevices)
+	messageService := messages.NewService(db)
 
 	webHandler, err := webui.NewHandler()
 	if err != nil {
@@ -46,7 +50,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddress(),
-		Handler:           httpserver.New(db, setupService, authService, pairingService, webHandler, logger),
+		Handler:           httpserver.New(db, setupService, authService, pairingService, messageService, hub, webHandler, logger),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -57,6 +61,7 @@ func main() {
 	go func() {
 		<-shutdownContext.Done()
 		logger.Info("shutdown requested")
+		hub.Close()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()

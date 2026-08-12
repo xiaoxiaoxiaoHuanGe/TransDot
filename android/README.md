@@ -28,3 +28,7 @@ Master Token 使用 Android Keystore AES-256-GCM 加密后保存在应用私有�
 ## Windows 配对
 
 Android Master 首页点击“配对 Windows”，可使用 CameraX + ZXing Core 扫描 Web 二维码，或输入 6 位备用码。扫码完全在设备本地完成，不依赖 Google Play 服务。若服务器已有有效 Windows，只有在手机确认“替换”后，服务端才会在同一个 SQLite 事务中撤销旧设备并启用新设备。
+
+## 文字时间线
+
+应用前台通过 OkHttp WebSocket 接收 `message.created`、`message.deleted` 和 `device.replaced`；进入前台及 WebSocket 重连后会通过 REST 重新同步。当前支持文字发送、游标分页、删除、FTS5 搜索及搜索结果上下文定位。App 退到后台时主动关闭 WebSocket，不依赖后台常驻连接。

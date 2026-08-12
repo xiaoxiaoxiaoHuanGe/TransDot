@@ -3,6 +3,7 @@ module transdot.local/transfer-assistant/server
 go 1.26
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/google/uuid v1.6.0
 	modernc.org/sqlite v1.54.0
 )

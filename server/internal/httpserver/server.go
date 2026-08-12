@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,9 +13,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"transdot.local/transfer-assistant/server/internal/deviceauth"
 	"transdot.local/transfer-assistant/server/internal/pairing"
+	"transdot.local/transfer-assistant/server/internal/realtime"
 	"transdot.local/transfer-assistant/server/internal/setup"
 )
 
@@ -43,6 +46,8 @@ func New(
 	setupService setupService,
 	authService deviceAuthenticator,
 	pairingService pairingService,
+	messageService messageService,
+	hub *realtime.Hub,
 	webHandler http.Handler,
 	logger *slog.Logger,
 ) http.Handler {
@@ -58,8 +63,13 @@ func New(
 	mux.HandleFunc("GET /api/v1/pairing/sessions/{id}/status", pairingStatus(pairingService, logger))
 	mux.HandleFunc("POST /api/v1/pairing/approve", approvePairing(authService, pairingService, pairingActionLimiter, logger))
 	mux.HandleFunc("POST /api/v1/pairing/reject", rejectPairing(authService, pairingService, pairingActionLimiter, logger))
+	mux.HandleFunc("GET /api/v1/messages", listMessages(authService, messageService, logger))
+	mux.HandleFunc("POST /api/v1/messages/text", createTextMessage(authService, messageService, hub, logger))
+	mux.HandleFunc("DELETE /api/v1/messages/{id}", deleteMessage(authService, messageService, hub, logger))
+	mux.HandleFunc("GET /api/v1/messages/{id}/context", messageContext(authService, messageService, logger))
+	mux.HandleFunc("GET /api/v1/search", searchMessages(authService, messageService, logger))
 	mux.HandleFunc("/api/", apiNotFound)
-	mux.HandleFunc("/ws", http.NotFound)
+	mux.HandleFunc("GET /ws", websocketEndpoint(authService, hub, logger))
 	mux.Handle("/", webHandler)
 
 	return recoverRequests(logger, logRequests(logger, mux))
@@ -117,8 +127,19 @@ func setupClaim(service setupService, limiter *attemptLimiter, logger *slog.Logg
 }
 
 func decodeJSONBody(w http.ResponseWriter, r *http.Request, destination any) error {
-	r.Body = http.MaxBytesReader(w, r.Body, 8*1024)
-	decoder := json.NewDecoder(r.Body)
+	return decodeJSONBodyLimit(w, r, destination, 8*1024)
+}
+
+func decodeJSONBodyLimit(w http.ResponseWriter, r *http.Request, destination any, maximumBytes int64) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maximumBytes)
+	contents, err := io.ReadAll(r.Body)
+	if err != nil {
+		return err
+	}
+	if !utf8.Valid(contents) {
+		return errors.New("request body must be valid UTF-8")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(contents))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {
 		return err
@@ -217,6 +238,10 @@ func remoteIP(remoteAddress string) string {
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
+}
+
+func (r *statusRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
 }
 
 func (r *statusRecorder) WriteHeader(status int) {

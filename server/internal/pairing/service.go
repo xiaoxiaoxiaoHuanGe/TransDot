@@ -58,14 +58,19 @@ type PollResult struct {
 }
 
 type Service struct {
-	db     *sql.DB
-	ttl    time.Duration
-	random io.Reader
-	now    func() time.Time
+	db               *sql.DB
+	ttl              time.Duration
+	random           io.Reader
+	now              func() time.Time
+	onDevicesRevoked func([]string)
 }
 
-func NewService(db *sql.DB, ttl time.Duration) *Service {
-	return &Service{db: db, ttl: ttl, random: cryptorand.Reader, now: time.Now}
+func NewService(db *sql.DB, ttl time.Duration, onDevicesRevoked ...func([]string)) *Service {
+	service := &Service{db: db, ttl: ttl, random: cryptorand.Reader, now: time.Now}
+	if len(onDevicesRevoked) > 0 {
+		service.onDevicesRevoked = onDevicesRevoked[0]
+	}
+	return service
 }
 
 func (s *Service) Create(ctx context.Context) (Session, error) {
@@ -431,7 +436,28 @@ func (s *Service) consumeApprovedSession(
 		return PollResult{Status: StatusRejected}, nil
 	}
 
+	var revokedDeviceIDs []string
 	if activeBrowsers > 0 {
+		rows, err := tx.QueryContext(ctx, `
+			SELECT id FROM devices
+			WHERE device_type = 'windows_browser' AND revoked_at IS NULL
+		`)
+		if err != nil {
+			return PollResult{}, fmt.Errorf("query replaced Windows browsers: %w", err)
+		}
+		for rows.Next() {
+			var deviceID string
+			if err := rows.Scan(&deviceID); err != nil {
+				rows.Close()
+				return PollResult{}, fmt.Errorf("scan replaced Windows browser: %w", err)
+			}
+			revokedDeviceIDs = append(revokedDeviceIDs, deviceID)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return PollResult{}, fmt.Errorf("iterate replaced Windows browsers: %w", err)
+		}
+		rows.Close()
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE devices
 			SET revoked_at = ?
@@ -457,6 +483,9 @@ func (s *Service) consumeApprovedSession(
 	}
 	if err := tx.Commit(); err != nil {
 		return PollResult{}, fmt.Errorf("commit pairing consumption: %w", err)
+	}
+	if len(revokedDeviceIDs) > 0 && s.onDevicesRevoked != nil {
+		s.onDevicesRevoked(revokedDeviceIDs)
 	}
 
 	return PollResult{Status: StatusApproved, BrowserToken: browserToken}, nil
