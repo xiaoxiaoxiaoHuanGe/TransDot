@@ -10,13 +10,15 @@ import (
 )
 
 const (
-	defaultPort    = 5757
-	defaultDataDir = "/app/data"
+	defaultPort         = 5757
+	defaultDataDir      = "/app/data"
+	minSetupTokenLength = 32
 )
 
 type Config struct {
-	Port    int
-	DataDir string
+	Port            int
+	DataDir         string
+	OwnerSetupToken string
 }
 
 func Load() (Config, error) {
@@ -39,6 +41,11 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("resolve DATA_DIR: %w", err)
 		}
 		cfg.DataDir = filepath.Clean(absolute)
+	}
+
+	cfg.OwnerSetupToken = strings.TrimSpace(os.Getenv("OWNER_SETUP_TOKEN"))
+	if len(cfg.OwnerSetupToken) < minSetupTokenLength {
+		return Config{}, fmt.Errorf("OWNER_SETUP_TOKEN must contain at least %d characters", minSetupTokenLength)
 	}
 
 	return cfg, nil

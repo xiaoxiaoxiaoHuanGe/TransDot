@@ -5,6 +5,7 @@ import "testing"
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("PORT", "")
 	t.Setenv("DATA_DIR", "")
+	t.Setenv("OWNER_SETUP_TOKEN", "0123456789abcdef0123456789abcdef")
 
 	cfg, err := Load()
 	if err != nil {
@@ -21,8 +22,17 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadRequiresStrongOwnerSetupToken(t *testing.T) {
+	t.Setenv("OWNER_SETUP_TOKEN", "too-short")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want OWNER_SETUP_TOKEN validation error")
+	}
+}
+
 func TestLoadRejectsInvalidPort(t *testing.T) {
 	t.Setenv("PORT", "70000")
+	t.Setenv("OWNER_SETUP_TOKEN", "0123456789abcdef0123456789abcdef")
 
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want invalid port error")

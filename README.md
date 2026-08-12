@@ -1,6 +1,6 @@
 # 私人文件传输助手
 
-这是《私人文件传输助手 V1 — 技术设计冻结规范》的 Task 01 基础工程。当前只包含：
+这是《私人文件传输助手 V1 — 技术设计冻结规范》的实现工程。当前已完成 Task 01 基线与 Task 02 首次初始化闭环：
 
 - Go HTTP 服务
 - SQLite migration 基础
@@ -9,8 +9,11 @@
 - Go 同源静态文件托管与 SPA fallback
 - 单容器 Docker 多阶段构建
 - `/app/data` 统一持久化目录
+- Android Kotlin + Jetpack Compose 基础应用
+- 一次性 Android Master Claim
+- Master Token 的服务端 SHA-256 存储与 Android Keystore 加密存储
 
-认证、配对、消息、WebSocket、文件传输与 Android 应用将在后续任务中实现。
+配对、业务鉴权、消息、WebSocket 与文件传输将在后续任务中实现。
 
 ## 启动
 
@@ -26,6 +29,7 @@ docker compose up --build -d
 
 - Web：<http://localhost:5757>
 - Health：<http://localhost:5757/healthz>
+- Setup 状态：<http://localhost:5757/api/v1/setup/status>
 
 停止服务：
 
@@ -34,6 +38,8 @@ docker compose down
 ```
 
 命名卷 `transfer-data` 挂载到容器内 `/app/data`。执行 `docker compose down` 不会删除数据；只有显式添加 `--volumes` 才会删除该卷。
+
+首次启动 Android 调试包后，填写电脑局域网地址（例如 `http://192.168.1.10:5757`）及本地 `.env` 中的 `OWNER_SETUP_TOKEN`。Claim 只允许成功一次；卸载应用丢失 Master Token 后，V1 不提供账号恢复。
 
 ## 本地 Web 开发
 
@@ -44,6 +50,17 @@ npm.cmd run dev
 ```
 
 生产环境不运行 Vite 开发服务器。Web 构建产物会嵌入 Go 二进制，由 Go 在同一端口提供。
+
+## Android 构建
+
+Android 项目位于 `android/`，使用仓库内 Gradle Wrapper：
+
+```powershell
+cd android
+./gradlew.bat testDebugUnitTest assembleDebug lintDebug
+```
+
+调试 APK 输出到 `android/app/build/outputs/apk/debug/app-debug.apk`。调试包仅为局域网真机测试允许 HTTP；Release 构建仍强制 HTTPS。
 
 ## 部署边界
 

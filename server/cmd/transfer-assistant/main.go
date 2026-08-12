@@ -13,6 +13,7 @@ import (
 	"transdot.local/transfer-assistant/server/internal/config"
 	"transdot.local/transfer-assistant/server/internal/database"
 	"transdot.local/transfer-assistant/server/internal/httpserver"
+	"transdot.local/transfer-assistant/server/internal/setup"
 	"transdot.local/transfer-assistant/server/internal/webui"
 )
 
@@ -31,6 +32,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer db.Close()
+	setupService := setup.NewService(db, cfg.OwnerSetupToken)
 
 	webHandler, err := webui.NewHandler()
 	if err != nil {
@@ -40,7 +42,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddress(),
-		Handler:           httpserver.New(db, webHandler, logger),
+		Handler:           httpserver.New(db, setupService, webHandler, logger),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}

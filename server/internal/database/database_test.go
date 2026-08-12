@@ -26,7 +26,7 @@ func TestOpenCreatesDataLayoutAndRunsMigrations(t *testing.T) {
 		t.Fatalf("query schema_migrations: %v", err)
 	}
 	if applied != 1 {
-		t.Fatalf("migration count = %d, want 1", applied)
+		t.Fatalf("migration version 1 count = %d, want 1", applied)
 	}
 
 	var initialized int
@@ -59,7 +59,7 @@ func TestOpenIsIdempotent(t *testing.T) {
 	if err := db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&applied); err != nil {
 		t.Fatalf("query schema_migrations: %v", err)
 	}
-	if applied != 1 {
-		t.Fatalf("migration count = %d, want 1", applied)
+	if applied != 2 {
+		t.Fatalf("migration count = %d, want 2", applied)
 	}
 }

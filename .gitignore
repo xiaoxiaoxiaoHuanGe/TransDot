@@ -4,7 +4,7 @@
 !.env.example
 
 # Local persistent data
-data/
+/data/
 
 # Go build output
 bin/
@@ -16,10 +16,12 @@ bin/
 web/node_modules/
 web/dist/
 
-# Android / Gradle (project is initialized in a later task)
+# Android / Gradle
 android/.gradle/
 android/local.properties
 android/**/build/
+.gradle-cache/
+artifacts/
 
 # IDE and operating system files
 .idea/
