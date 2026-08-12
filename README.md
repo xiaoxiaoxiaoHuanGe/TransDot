@@ -22,6 +22,29 @@
 
 文件、图片、缩略图和上传将在后续任务中实现。
 
+## 在另一台电脑运行
+
+新电脑需要安装 Git 与 Docker Desktop（包含 Docker Compose），不需要安装 Go、Node.js 或 Gradle。克隆后先从示例创建本地环境文件：
+
+```powershell
+git clone <GitHub 仓库地址> TransDot
+cd TransDot
+Copy-Item .env.example .env
+notepad .env
+```
+
+将 `.env` 中的 `OWNER_SETUP_TOKEN` 替换为至少 32 个随机字符，然后构建并启动：
+
+```powershell
+docker compose up --build -d
+docker compose ps
+Invoke-RestMethod http://localhost:5757/healthz
+```
+
+浏览器访问 <http://localhost:5757>。同一局域网内的 Android 手机应使用新电脑的局域网 IP，例如 `http://192.168.1.10:5757`；同时确认 Windows 防火墙允许 TCP 5757 入站连接。
+
+仓库不会提交 `.env`、APK、SQLite 数据库或 Docker 命名卷。直接克隆会创建一个全新的服务实例；若要把现有 Master、设备关系和消息一起迁移，还必须单独备份并恢复 Docker 卷 `transfer-assistant-data`，不能只复制 Git 仓库。
+
 ## 启动
 
 无需在 Windows 安装 Go：
