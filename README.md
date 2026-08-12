@@ -27,7 +27,7 @@
 新电脑需要安装 Git 与 Docker Desktop（包含 Docker Compose），不需要安装 Go、Node.js 或 Gradle。克隆后先从示例创建本地环境文件：
 
 ```powershell
-git clone <GitHub 仓库地址> TransDot
+git clone https://github.com/xiaoxiaoxiaoHuanGe/TransDot.git TransDot
 cd TransDot
 Copy-Item .env.example .env
 notepad .env
