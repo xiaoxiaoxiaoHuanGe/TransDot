@@ -73,11 +73,13 @@ class TimelineViewModelTest {
         assertFalse(viewModel.uiState.value.searchOpen)
         assertEquals("message-2", viewModel.uiState.value.highlightedMessageId)
 
-        viewModel.requestDelete(realtime)
+        val sent = viewModel.uiState.value.messages.first { it.id == "message-sent" }
+        viewModel.requestDelete(listOf(realtime, sent))
         viewModel.confirmDelete()
         dispatcher.scheduler.advanceUntilIdle()
-        assertEquals(listOf("message-2"), repository.deletedIDs)
+        assertEquals(listOf("message-2", "message-sent"), repository.deletedIDs)
         assertFalse(viewModel.uiState.value.messages.any { it.id == "message-2" })
+        assertFalse(viewModel.uiState.value.messages.any { it.id == "message-sent" })
 
         viewModel.stop()
         assertTrue(repository.connectionClosed)

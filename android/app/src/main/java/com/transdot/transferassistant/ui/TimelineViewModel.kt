@@ -43,7 +43,7 @@ data class TimelineUiState(
     val searchResults: List<TimelineMessage> = emptyList(),
     val isSearching: Boolean = false,
     val highlightedMessageId: String? = null,
-    val deleteTarget: TimelineMessage? = null,
+    val deleteTargets: List<TimelineMessage> = emptyList(),
     val isDeleting: Boolean = false,
     val credentialInvalid: Boolean = false,
     val uploads: List<UploadProgress> = emptyList(),
@@ -195,33 +195,40 @@ class TimelineViewModel(
         }
     }
 
-    fun requestDelete(message: TimelineMessage) {
-        mutableUiState.update { it.copy(deleteTarget = message, errorMessage = null) }
+    fun requestDelete(messages: List<TimelineMessage>) {
+        if (messages.isEmpty()) return
+        mutableUiState.update { it.copy(deleteTargets = messages, errorMessage = null) }
     }
 
     fun cancelDelete() {
         if (mutableUiState.value.isDeleting) return
-        mutableUiState.update { it.copy(deleteTarget = null) }
+        mutableUiState.update { it.copy(deleteTargets = emptyList()) }
     }
 
     fun confirmDelete() {
         val activeSession = session ?: return
-        val target = mutableUiState.value.deleteTarget ?: return
+        val targets = mutableUiState.value.deleteTargets
+        if (targets.isEmpty()) return
         if (mutableUiState.value.isDeleting) return
         mutableUiState.update { it.copy(isDeleting = true) }
         viewModelScope.launch {
-            runCatching { repository.delete(activeSession, target.id) }
-                .onSuccess {
-                    mutableUiState.update {
-                        it.copy(
-                            messages = it.messages.filterNot { message -> message.id == target.id },
-                            searchResults = it.searchResults.filterNot { message -> message.id == target.id },
-                            deleteTarget = null,
-                            isDeleting = false,
-                        )
-                    }
-                }
-                .onFailure { failure -> handleFailure(failure) { it.copy(isDeleting = false) } }
+            val deletedIds = mutableSetOf<String>()
+            var failure: Throwable? = null
+            for (target in targets) {
+                runCatching { repository.delete(activeSession, target.id) }
+                    .onSuccess { deletedIds += target.id }
+                    .onFailure { error -> failure = error }
+                if (failure != null) break
+            }
+            mutableUiState.update {
+                it.copy(
+                    messages = it.messages.filterNot { message -> message.id in deletedIds },
+                    searchResults = it.searchResults.filterNot { message -> message.id in deletedIds },
+                    deleteTargets = targets.filterNot { target -> target.id in deletedIds },
+                    isDeleting = false,
+                )
+            }
+            failure?.let { error -> handleFailure(error) }
         }
     }
 

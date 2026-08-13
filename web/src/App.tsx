@@ -367,8 +367,9 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
   const [searchResults, setSearchResults] = useState<TimelineMessage[]>([])
   const [searching, setSearching] = useState(false)
   const [highlightedID, setHighlightedID] = useState('')
-  const [deleteTarget, setDeleteTarget] = useState<TimelineMessage | null>(null)
+  const [deleteTargets, setDeleteTargets] = useState<TimelineMessage[]>([])
   const [deleting, setDeleting] = useState(false)
+  const [actionNotice, setActionNotice] = useState('')
   const [attachmentOpen, setAttachmentOpen] = useState(false)
   const [pendingUploads, setPendingUploads] = useState<PendingUpload[]>([])
   const [dragging, setDragging] = useState(false)
@@ -386,6 +387,12 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
   const knownMessageIDsRef = useRef<Set<string>>(new Set())
   const initialSyncCompleteRef = useRef(false)
   const scrollRequestIDRef = useRef(0)
+
+  useEffect(() => {
+    if (!actionNotice) return
+    const timer = window.setTimeout(() => setActionNotice(''), 1_800)
+    return () => window.clearTimeout(timer)
+  }, [actionNotice])
 
   const requestScrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
     isAtBottomRef.current = true
@@ -587,16 +594,46 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
   }
 
   const confirmDelete = async () => {
-    if (!deleteTarget || deleting) return
+    if (deleteTargets.length === 0 || deleting) return
     setDeleting(true)
+    const targets = [...deleteTargets]
     try {
-      await request<void>(`/api/v1/messages/${encodeURIComponent(deleteTarget.id)}`, { method: 'DELETE' })
-      setMessages((current) => current.filter((message) => message.id !== deleteTarget.id))
-      setDeleteTarget(null)
-    } catch (error) {
-      if (!handleAuthError(error)) setErrorMessage(error instanceof Error ? error.message : '删除失败。')
+      const results = await Promise.allSettled(targets.map((target) =>
+        request<void>(`/api/v1/messages/${encodeURIComponent(target.id)}`, { method: 'DELETE' }),
+      ))
+      const deletedIDs = new Set(targets.filter((_, index) => results[index].status === 'fulfilled').map((target) => target.id))
+      const failedTargets = targets.filter((_, index) => results[index].status === 'rejected')
+      if (deletedIDs.size > 0) {
+        setMessages((current) => current.filter((message) => !deletedIDs.has(message.id)))
+        setSearchResults((current) => current.filter((message) => !deletedIDs.has(message.id)))
+      }
+      if (failedTargets.length === 0) {
+        setDeleteTargets([])
+        setActionNotice(targets.length > 1 ? `已删除 ${targets.length} 条消息` : '消息已删除')
+      } else {
+        const firstFailure = results.find((result) => result.status === 'rejected')
+        const reason = firstFailure?.status === 'rejected' ? firstFailure.reason : null
+        if (!handleAuthError(reason)) {
+          setDeleteTargets(failedTargets)
+          setErrorMessage(reason instanceof Error ? reason.message : '部分消息删除失败，请重试。')
+        }
+      }
     } finally {
       setDeleting(false)
+    }
+  }
+
+  const copyMessages = async (targets: TimelineMessage[]) => {
+    const value = targets
+      .map((message) => message.type === 'text' ? message.text_content || '' : message.file?.original_filename)
+      .filter((item): item is string => Boolean(item))
+      .join('\n')
+    if (!value) return
+    try {
+      await copyTextToClipboard(value)
+      setActionNotice(targets.length > 1 ? `已复制 ${targets.length} 个文件名` : '已复制')
+    } catch {
+      setErrorMessage('复制失败，请检查浏览器剪贴板权限。')
     }
   }
 
@@ -800,15 +837,22 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
                       <span>{message.source_device_type === 'android_master' ? 'Android' : 'Windows'}</span>
                       <time dateTime={message.created_at}>{formatMessageTime(message.created_at)}</time>
                     </div>
-                    {group.kind === 'images' ? (
-                      <ImageGrid
-                        messages={group.messages}
-                        onOpen={(index) => setViewer({ images: group.messages, index })}
-                        onDelete={setDeleteTarget}
+                    <div className="message-body-line">
+                      <MessageActions
+                        onCopy={() => void copyMessages(group.messages)}
+                        onDelete={() => setDeleteTargets(group.messages)}
+                        copyLabel={group.messages.length > 1 ? '复制这组文件名' : '复制消息'}
+                        deleteLabel={group.messages.length > 1 ? '删除这组消息' : '删除消息'}
                       />
-                    ) : (
-                      <MessageCard message={message} onDelete={() => setDeleteTarget(message)} onOpenImage={() => setViewer({ images: [message], index: 0 })} />
-                    )}
+                      {group.kind === 'images' ? (
+                        <ImageGrid
+                          messages={group.messages}
+                          onOpen={(index) => setViewer({ images: group.messages, index })}
+                        />
+                      ) : (
+                        <MessageCard message={message} onOpenImage={() => setViewer({ images: [message], index: 0 })} />
+                      )}
+                    </div>
                   </article>
                 )
               })}
@@ -822,6 +866,7 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
       </main>
 
       <div className="composer-region">
+        {actionNotice && <div className="action-notice" role="status" aria-live="polite">{actionNotice}</div>}
         {!isAtBottom && (
           <button
             className={`scroll-to-bottom ${unreadCount > 0 ? 'scroll-to-bottom--unread' : ''}`}
@@ -904,13 +949,13 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
         </div>
       )}
 
-      {deleteTarget && (
+      {deleteTargets.length > 0 && (
         <div className="sheet-backdrop sheet-backdrop--center" role="presentation">
           <div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-title">
-            <h2 id="delete-title">删除这条消息？</h2>
-            <p>{deleteTarget.type === 'text' ? '删除会同步到 Android，并从全文搜索索引中移除。' : '删除会同步移除消息、原文件和缩略图，此操作无法撤销。'}</p>
+            <h2 id="delete-title">{deleteTargets.length > 1 ? `删除这组 ${deleteTargets.length} 条消息？` : '删除这条消息？'}</h2>
+            <p>{deleteTargets.every((target) => target.type === 'text') ? '删除会同步到 Android，并从全文搜索索引中移除。' : '删除会同步移除消息、原文件和缩略图，此操作无法撤销。'}</p>
             <div>
-              <button type="button" onClick={() => setDeleteTarget(null)} disabled={deleting}>取消</button>
+              <button type="button" onClick={() => setDeleteTargets([])} disabled={deleting}>取消</button>
               <button className="danger-button" type="button" onClick={() => void confirmDelete()} disabled={deleting}>{deleting ? '删除中' : '删除'}</button>
             </div>
           </div>
@@ -950,12 +995,21 @@ function groupTimelineMessages(messages: TimelineMessage[]): TimelineGroup[] {
   return groups
 }
 
-function MessageCard({ message, onDelete, onOpenImage }: { message: TimelineMessage, onDelete: () => void, onOpenImage: () => void }) {
+function MessageActions({ onCopy, onDelete, copyLabel, deleteLabel }: { onCopy: () => void, onDelete: () => void, copyLabel: string, deleteLabel: string }) {
+  return (
+    <div className="message-actions" aria-label="消息操作">
+      <button type="button" onClick={onCopy} aria-label={copyLabel} title="复制"><CopyIcon /></button>
+      <button className="message-action--delete" type="button" onClick={onDelete} aria-label={deleteLabel} title="删除"><TrashIcon /></button>
+    </div>
+  )
+}
+
+function MessageCard({ message, onOpenImage }: { message: TimelineMessage, onOpenImage: () => void }) {
   if (message.type === 'text') {
-    return <div className="message-bubble"><p>{message.text_content}</p><button type="button" onClick={onDelete}>删除</button></div>
+    return <div className="message-bubble"><p>{message.text_content}</p></div>
   }
   if (message.type === 'image') {
-    return <ImageGrid messages={[message]} onOpen={onOpenImage} onDelete={() => onDelete()} />
+    return <ImageGrid messages={[message]} onOpen={onOpenImage} />
   }
   const file = message.file
   return (
@@ -963,12 +1017,11 @@ function MessageCard({ message, onDelete, onOpenImage }: { message: TimelineMess
       <span className="file-icon">{fileExtension(file?.original_filename || '')}</span>
       <div className="file-copy"><strong title={file?.original_filename}>{file?.original_filename || '文件'}</strong><span>{formatBytes(file?.size_bytes || 0)} · {fileStatusLabel(file)}</span></div>
       {file?.status === 'available' ? <a className="file-action" href={file.download_url} download>下载</a> : <span className="file-action file-action--disabled">已过期</span>}
-      <button className="card-delete" type="button" onClick={onDelete} aria-label="删除文件消息">删除</button>
     </div>
   )
 }
 
-function ImageGrid({ messages, onOpen, onDelete }: { messages: TimelineMessage[], onOpen: (index: number) => void, onDelete: (message: TimelineMessage) => void }) {
+function ImageGrid({ messages, onOpen }: { messages: TimelineMessage[], onOpen: (index: number) => void }) {
   const visible = messages.slice(0, 6)
   return (
     <div className={`image-grid image-grid--${Math.min(messages.length, 5)}`}>
@@ -982,7 +1035,6 @@ function ImageGrid({ messages, onOpen, onDelete }: { messages: TimelineMessage[]
               {expired && <span className="image-expired">原图已过期</span>}
               {index === 5 && messages.length > 6 && <span className="image-more">+{messages.length - 5}</span>}
             </button>
-            <button className="image-delete" type="button" onClick={() => onDelete(message)} aria-label={`删除 ${file?.original_filename || '图片'}`}>×</button>
           </div>
         )
       })}
@@ -1015,7 +1067,7 @@ function ImageViewer({ images, index, onIndexChange, onClose }: { images: Timeli
   return (
     <div className="viewer" role="dialog" aria-modal="true" aria-label="图片查看器">
       <header><button type="button" onClick={onClose}>← 返回</button><span>{index + 1} / {images.length}</span>{file?.status === 'available' ? <a href={file.download_url} download>下载原图</a> : <span>原图已过期</span>}</header>
-      <div className="viewer-stage">
+      <div className="viewer-stage" onClick={(event) => { if (event.target === event.currentTarget) onClose() }}>
         {file?.status === 'available' ? <img src={file.download_url} alt={file.original_filename} /> : file?.thumbnail_url ? <img className="viewer-expired" src={file.thumbnail_url} alt={file.original_filename} /> : <p>图片已不可用</p>}
       </div>
       {images.length > 1 && <><button className="viewer-nav viewer-nav--left" type="button" disabled={index === 0} onClick={() => onIndexChange(index - 1)}>‹</button><button className="viewer-nav viewer-nav--right" type="button" disabled={index === images.length - 1} onClick={() => onIndexChange(index + 1)}>›</button></>}
@@ -1055,6 +1107,30 @@ function Brand() {
 
 function SearchIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3" /><path d="m15.5 15.5 4.2 4.2" /></svg>
+}
+
+function CopyIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="10" height="11" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h1" /></svg>
+}
+
+function TrashIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 7h15M9 7V4.8h6V7M7 7l.8 12h8.4L17 7M10 10.5v5M14 10.5v5" /></svg>
+}
+
+async function copyTextToClipboard(value: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value)
+    return
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = value
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+  const copied = document.execCommand('copy')
+  textarea.remove()
+  if (!copied) throw new Error('Clipboard unavailable')
 }
 
 function formatMessageTime(value: string) {

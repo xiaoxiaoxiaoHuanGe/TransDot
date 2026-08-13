@@ -13,9 +13,12 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.scrollBy
@@ -31,6 +34,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -39,6 +43,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -62,6 +67,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -77,8 +84,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -88,6 +101,7 @@ import androidx.compose.ui.unit.sp
 import com.transdot.transferassistant.data.FileAttachment
 import com.transdot.transferassistant.data.TimelineMessage
 import com.transdot.transferassistant.data.UploadProgress
+import com.transdot.transferassistant.IncomingShare
 import com.transdot.transferassistant.ui.theme.AppSpacing
 import com.transdot.transferassistant.ui.theme.ThemeMode
 import kotlinx.coroutines.delay
@@ -101,12 +115,49 @@ import kotlin.math.roundToInt
 
 private data class ViewerState(val images: List<TimelineMessage>, val initialIndex: Int)
 private data class MessageGroup(val key: String, val messages: List<TimelineMessage>)
+private const val ACTION_NOTICE_TOTAL_DURATION_MS = 1_500L
+private const val ACTION_NOTICE_EXIT_DURATION_MS = 140
+
+private data class ActionNotice(val id: Int, val message: String, val visible: Boolean = true)
+
+@Composable
+private fun ActionNoticeOverlay(notice: ActionNotice?, modifier: Modifier = Modifier) {
+    AnimatedVisibility(
+        visible = notice?.visible == true,
+        modifier = modifier,
+        enter = fadeIn(animationSpec = tween(durationMillis = 120)),
+        exit = fadeOut(animationSpec = tween(durationMillis = ACTION_NOTICE_EXIT_DURATION_MS)),
+    ) {
+        Surface(
+            modifier = Modifier.wrapContentWidth().widthIn(max = 280.dp),
+            shape = CircleShape,
+            color = Color.Black.copy(alpha = 0.88f),
+            contentColor = Color.White,
+            tonalElevation = 0.dp,
+            shadowElevation = 4.dp,
+        ) {
+            Text(
+                text = notice?.message.orEmpty(),
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                color = Color.White,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
 
 @Composable
 fun TimelineScreen(
     state: TimelineUiState,
     ownDeviceId: String,
     themeMode: ThemeMode,
+    incomingShare: IncomingShare?,
+    onShareConsumed: () -> Unit,
     onThemeModeChange: (ThemeMode) -> Unit,
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
@@ -115,7 +166,7 @@ fun TimelineScreen(
     onDownload: (TimelineMessage, Uri) -> Unit,
     loadImage: suspend (TimelineMessage, Boolean) -> Bitmap?,
     onLoadOlder: () -> Unit,
-    onRequestDelete: (TimelineMessage) -> Unit,
+    onRequestDelete: (List<TimelineMessage>) -> Unit,
     onCancelDelete: () -> Unit,
     onConfirmDelete: () -> Unit,
     onOpenSearch: () -> Unit,
@@ -131,6 +182,12 @@ fun TimelineScreen(
     var settingsSheet by remember { mutableStateOf(false) }
     var viewer by remember { mutableStateOf<ViewerState?>(null) }
     var pendingDownload by remember { mutableStateOf<TimelineMessage?>(null) }
+    var actionNotice by remember { mutableStateOf<ActionNotice?>(null) }
+    var nextActionNoticeId by remember { mutableIntStateOf(0) }
+    val showActionNotice: (String) -> Unit = { message ->
+        nextActionNoticeId += 1
+        actionNotice = ActionNotice(nextActionNoticeId, message)
+    }
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(20)) { uris ->
         if (uris.isNotEmpty()) onUpload(uris)
     }
@@ -153,6 +210,24 @@ fun TimelineScreen(
                 type = attachment.mimeType
                 putExtra(Intent.EXTRA_TITLE, attachment.originalFilename)
             })
+        }
+    }
+
+    LaunchedEffect(actionNotice?.id) {
+        val currentNotice = actionNotice ?: return@LaunchedEffect
+        delay(ACTION_NOTICE_TOTAL_DURATION_MS - ACTION_NOTICE_EXIT_DURATION_MS)
+        if (actionNotice?.id != currentNotice.id) return@LaunchedEffect
+        actionNotice = currentNotice.copy(visible = false)
+        delay(ACTION_NOTICE_EXIT_DURATION_MS.toLong())
+        if (actionNotice?.id == currentNotice.id) actionNotice = null
+    }
+
+    LaunchedEffect(incomingShare?.id) {
+        val shared = incomingShare ?: return@LaunchedEffect
+        if (shared.files.isEmpty() && !shared.text.isNullOrBlank()) {
+            onDraftChange(shared.text)
+            onShareConsumed()
+            showActionNotice("分享文字已放入输入框")
         }
     }
 
@@ -185,15 +260,17 @@ fun TimelineScreen(
                 loadImage = loadImage,
                 onRetryUpload = onRetryUpload,
                 onClearHighlight = onClearHighlight,
+                actionNotice = actionNotice,
+                onShowActionNotice = showActionNotice,
             )
         }
     }
 
-    state.deleteTarget?.let { target ->
+    state.deleteTargets.takeIf { it.isNotEmpty() }?.let { targets ->
         AlertDialog(
             onDismissRequest = onCancelDelete,
-            title = { Text("删除这条消息？") },
-            text = { Text(if (target.type == "text") "删除会同步到 Windows，并从全文搜索中移除。" else "消息、原文件与缩略图会一起删除，无法撤销。") },
+            title = { Text(if (targets.size > 1) "删除这组 ${targets.size} 条消息？" else "删除这条消息？") },
+            text = { Text(if (targets.all { it.type == "text" }) "删除会同步到 Windows，并从全文搜索中移除。" else "消息、原文件与缩略图会一起删除，无法撤销。") },
             confirmButton = { TextButton(onClick = onConfirmDelete, enabled = !state.isDeleting) { Text(if (state.isDeleting) "删除中" else "删除") } },
             dismissButton = { TextButton(onClick = onCancelDelete, enabled = !state.isDeleting) { Text("取消") } },
         )
@@ -222,6 +299,36 @@ fun TimelineScreen(
     if (settingsSheet) {
         SettingsSheet(themeMode, onThemeModeChange) { settingsSheet = false }
     }
+    incomingShare?.takeIf { it.files.isNotEmpty() }?.let { shared ->
+        val tooMany = shared.files.size > 20
+        AlertDialog(
+            onDismissRequest = onShareConsumed,
+            title = { Text("发送到传输助手？") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(AppSpacing.small)) {
+                    Text("共 ${shared.files.size} 个文件")
+                    shared.files.take(5).forEach { file ->
+                        Text("• ${file.displayName}", maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
+                    }
+                    if (shared.files.size > 5) Text("以及其他 ${shared.files.size - 5} 个文件", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (!shared.text.isNullOrBlank()) Text("附带文字会放入输入框，可在上传后单独发送。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (tooMany) Text("一次最多发送 20 个文件，请减少选择数量。", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onUpload(shared.files.map { it.uri })
+                        shared.text?.takeIf(String::isNotBlank)?.let(onDraftChange)
+                        onShareConsumed()
+                        showActionNotice("已加入上传队列")
+                    },
+                    enabled = !state.isUploading && !tooMany,
+                ) { Text(if (state.isUploading) "正在上传" else "发送") }
+            },
+            dismissButton = { TextButton(onClick = onShareConsumed) { Text("取消") } },
+        )
+    }
 }
 
 @Composable
@@ -231,7 +338,7 @@ private fun TimelineHome(
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onLoadOlder: () -> Unit,
-    onRequestDelete: (TimelineMessage) -> Unit,
+    onRequestDelete: (List<TimelineMessage>) -> Unit,
     onOpenSearch: () -> Unit,
     onPairWindows: () -> Unit,
     onOpenAttachment: () -> Unit,
@@ -241,9 +348,12 @@ private fun TimelineHome(
     loadImage: suspend (TimelineMessage, Boolean) -> Bitmap?,
     onRetryUpload: () -> Unit,
     onClearHighlight: () -> Unit,
+    actionNotice: ActionNotice?,
+    onShowActionNotice: (String) -> Unit,
 ) {
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
+    val clipboardManager = LocalClipboardManager.current
     val groups = remember(state.messages) { groupMessages(state.messages) }
     var isFollowingLatest by remember { mutableStateOf(true) }
     var programmaticScroll by remember { mutableStateOf(false) }
@@ -251,6 +361,26 @@ private fun TimelineHome(
     var initialPositioned by remember { mutableStateOf(false) }
     var previousNewestMessageId by remember { mutableStateOf<String?>(null) }
     var knownMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var wasUploading by remember { mutableStateOf(false) }
+    var wasDeleting by remember { mutableStateOf(false) }
+
+    fun copyMessages(messages: List<TimelineMessage>) {
+        val value = messages.joinToString("\n") { message ->
+            if (message.type == "text") message.textContent.orEmpty() else message.file?.originalFilename.orEmpty()
+        }.trim()
+        if (value.isEmpty()) return
+        clipboardManager.setText(AnnotatedString(value))
+        onShowActionNotice(if (messages.size > 1) "已复制 ${messages.size} 个文件名" else "已复制")
+    }
+
+    LaunchedEffect(state.isUploading, state.errorMessage) {
+        if (wasUploading && !state.isUploading && state.errorMessage == null) onShowActionNotice("文件上传完成")
+        wasUploading = state.isUploading
+    }
+    LaunchedEffect(state.isDeleting, state.errorMessage) {
+        if (wasDeleting && !state.isDeleting && state.deleteTargets.isEmpty() && state.errorMessage == null) onShowActionNotice("消息已删除")
+        wasDeleting = state.isDeleting
+    }
 
     suspend fun scrollToBottom(animated: Boolean) {
         val itemCount = snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > 0 }
@@ -353,14 +483,16 @@ private fun TimelineHome(
                                 highlighted = group.messages.any { it.id == state.highlightedMessageId },
                                 loadImage = loadImage,
                                 onOpen = { onOpenImages(group.messages, it) },
-                                onDelete = onRequestDelete,
+                                onCopy = { copyMessages(group.messages) },
+                                onDelete = { onRequestDelete(group.messages) },
                             )
                         } else {
                             MessageBubble(
                                 message = group.messages.first(),
                                 own = group.messages.first().sourceDeviceId == ownDeviceId,
                                 highlighted = group.messages.first().id == state.highlightedMessageId,
-                                onDelete = { onRequestDelete(group.messages.first()) },
+                                onCopy = { copyMessages(group.messages) },
+                                onDelete = { onRequestDelete(group.messages) },
                                 onDownload = { onDownload(group.messages.first()) },
                             )
                         }
@@ -414,6 +546,17 @@ private fun TimelineHome(
                     }
                 }
             }
+            val noticeBottomPadding = when {
+                state.downloadMessageId != null && !isFollowingLatest -> 136.dp
+                state.downloadMessageId != null || !isFollowingLatest -> 76.dp
+                else -> AppSpacing.medium
+            }
+            ActionNoticeOverlay(
+                notice = actionNotice,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(start = 24.dp, end = 24.dp, bottom = noticeBottomPadding),
+            )
         }
     }
 }
@@ -459,6 +602,7 @@ private fun MessageBubble(
     message: TimelineMessage,
     own: Boolean,
     highlighted: Boolean,
+    onCopy: () -> Unit,
     onDelete: () -> Unit,
     onDownload: () -> Unit,
 ) {
@@ -474,11 +618,16 @@ private fun MessageBubble(
                 ) {
                     Column(Modifier.padding(horizontal = AppSpacing.medium, vertical = AppSpacing.small)) {
                         Text(message.textContent.orEmpty(), style = MaterialTheme.typography.bodyLarge, lineHeight = 24.sp)
-                        TextButton(onClick = onDelete, Modifier.align(Alignment.End)) { Text("删除", style = MaterialTheme.typography.labelSmall) }
+                        MessageActionButtons(
+                            onCopy = onCopy,
+                            onDelete = onDelete,
+                            tint = if (own) MaterialTheme.colorScheme.onPrimary.copy(alpha = .78f) else MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.align(Alignment.End),
+                        )
                     }
                 }
             } else {
-                FileCard(requireNotNull(message.file), own, onDownload, onDelete)
+                FileCard(requireNotNull(message.file), own, onDownload, onCopy, onDelete)
             }
         }
     }
@@ -486,7 +635,7 @@ private fun MessageBubble(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun FileCard(file: FileAttachment, own: Boolean, onDownload: () -> Unit, onDelete: () -> Unit) {
+private fun FileCard(file: FileAttachment, own: Boolean, onDownload: () -> Unit, onCopy: () -> Unit, onDelete: () -> Unit) {
     Surface(
         modifier = Modifier.widthIn(min = 280.dp, max = 340.dp).clip(messageShape(own)).combinedClickable(onClick = {}, onLongClick = onDelete),
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -502,7 +651,7 @@ private fun FileCard(file: FileAttachment, own: Boolean, onDownload: () -> Unit,
                 }
                 if (file.status == "available") TextButton(onClick = onDownload) { Text("下载") } else Text("已过期", style = MaterialTheme.typography.labelSmall)
             }
-            TextButton(onClick = onDelete, Modifier.align(Alignment.End)) { Text("删除", style = MaterialTheme.typography.labelSmall) }
+            MessageActionButtons(onCopy, onDelete, MaterialTheme.colorScheme.primary, Modifier.align(Alignment.End))
         }
     }
 }
@@ -514,7 +663,8 @@ private fun ImageGroup(
     highlighted: Boolean,
     loadImage: suspend (TimelineMessage, Boolean) -> Bitmap?,
     onOpen: (Int) -> Unit,
-    onDelete: (TimelineMessage) -> Unit,
+    onCopy: () -> Unit,
+    onDelete: () -> Unit,
 ) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (own) Arrangement.End else Arrangement.Start) {
         Column(Modifier.widthIn(max = 350.dp), horizontalAlignment = if (own) Alignment.End else Alignment.Start) {
@@ -525,33 +675,90 @@ private fun ImageGroup(
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                             row.forEachIndexed { columnIndex, message ->
                                 val index = rowIndex * 2 + columnIndex
-                                ImageTile(message, Modifier.weight(1f), loadImage, { onOpen(index) }, { onDelete(message) }, if (index == 5) messages.size - 6 else 0)
+                                ImageTile(message, Modifier.weight(1f), loadImage, { onOpen(index) }, if (index == 5) messages.size - 6 else 0)
                             }
                             if (row.size == 1 && messages.size > 1) Spacer(Modifier.weight(1f))
                         }
                     }
+                    MessageActionButtons(onCopy, onDelete, MaterialTheme.colorScheme.primary, Modifier.align(Alignment.End).padding(end = 4.dp))
                 }
             }
         }
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ImageTile(
     message: TimelineMessage,
     modifier: Modifier,
     loadImage: suspend (TimelineMessage, Boolean) -> Bitmap?,
     onOpen: () -> Unit,
-    onDelete: () -> Unit,
     more: Int,
 ) {
     val bitmap by produceState<Bitmap?>(null, message.id, message.file?.thumbnailUrl) { value = loadImage(message, false) }
-    Box(modifier.aspectRatio(if (message.batchId == null) 1.3f else 1f).clip(RoundedCornerShape(12.dp)).combinedClickable(onClick = onOpen, onLongClick = onDelete)) {
+    Box(modifier.aspectRatio(if (message.batchId == null) 1.3f else 1f).clip(RoundedCornerShape(12.dp)).clickable(onClick = onOpen)) {
         if (bitmap != null) Image(requireNotNull(bitmap).asImageBitmap(), message.file?.originalFilename, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         else Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerHigh), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp) }
         if (message.file?.status != "available") Surface(Modifier.align(Alignment.BottomCenter).padding(6.dp), shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.scrim.copy(alpha = .7f)) { Text("原图已过期", Modifier.padding(6.dp), color = androidx.compose.ui.graphics.Color.White, style = MaterialTheme.typography.labelSmall) }
         if (more > 0) Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black.copy(alpha = .58f)), contentAlignment = Alignment.Center) { Text("+${more + 1}", color = androidx.compose.ui.graphics.Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold) }
+    }
+}
+
+@Composable
+private fun MessageActionButtons(
+    onCopy: () -> Unit,
+    onDelete: () -> Unit,
+    tint: Color,
+    modifier: Modifier = Modifier,
+) {
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = onCopy, modifier = Modifier.size(34.dp)) {
+            CopyGlyph(tint)
+        }
+        IconButton(onClick = onDelete, modifier = Modifier.size(34.dp)) {
+            TrashGlyph(tint)
+        }
+    }
+}
+
+@Composable
+private fun CopyGlyph(tint: Color) {
+    Canvas(Modifier.size(17.dp)) {
+        val stroke = 1.55.dp.toPx()
+        drawRoundRect(
+            color = tint,
+            topLeft = Offset(size.width * .32f, size.height * .29f),
+            size = Size(size.width * .56f, size.height * .61f),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(stroke * 1.7f),
+            style = Stroke(stroke),
+        )
+        drawRoundRect(
+            color = tint,
+            topLeft = Offset(size.width * .12f, size.height * .09f),
+            size = Size(size.width * .56f, size.height * .61f),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(stroke * 1.7f),
+            style = Stroke(stroke),
+        )
+    }
+}
+
+@Composable
+private fun TrashGlyph(tint: Color) {
+    Canvas(Modifier.size(17.dp)) {
+        val stroke = 1.55.dp.toPx()
+        drawLine(tint, Offset(size.width * .16f, size.height * .27f), Offset(size.width * .84f, size.height * .27f), stroke)
+        drawLine(tint, Offset(size.width * .38f, size.height * .12f), Offset(size.width * .62f, size.height * .12f), stroke)
+        drawLine(tint, Offset(size.width * .38f, size.height * .12f), Offset(size.width * .32f, size.height * .27f), stroke)
+        drawLine(tint, Offset(size.width * .62f, size.height * .12f), Offset(size.width * .68f, size.height * .27f), stroke)
+        drawRoundRect(
+            color = tint,
+            topLeft = Offset(size.width * .25f, size.height * .32f),
+            size = Size(size.width * .5f, size.height * .57f),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(stroke * 1.4f),
+            style = Stroke(stroke),
+        )
+        drawLine(tint, Offset(size.width * .43f, size.height * .45f), Offset(size.width * .43f, size.height * .75f), stroke)
+        drawLine(tint, Offset(size.width * .57f, size.height * .45f), Offset(size.width * .57f, size.height * .75f), stroke)
     }
 }
 
@@ -596,23 +803,64 @@ private fun MessageComposer(
     val focusManager = LocalFocusManager.current
     val byteCount = draft.toByteArray().size
     Surface(tonalElevation = 3.dp) {
-        Column(Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(horizontal = AppSpacing.medium, vertical = AppSpacing.small)) {
+        Column(Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(horizontal = AppSpacing.medium, vertical = 9.dp)) {
             AnimatedVisibility(errorMessage != null) {
                 Text(errorMessage.orEmpty(), Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.errorContainer, RoundedCornerShape(12.dp)).padding(AppSpacing.small), color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.labelMedium)
             }
-            Row(Modifier.fillMaxWidth().padding(top = if (errorMessage != null) AppSpacing.small else 0.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(AppSpacing.small)) {
-                IconButton(onClick = onAttachment) { Text("＋", fontSize = 25.sp) }
-                OutlinedTextField(
-                    draft, onDraftChange, Modifier.weight(1f), minLines = 1, maxLines = 5,
+            Row(Modifier.fillMaxWidth().padding(top = if (errorMessage != null) AppSpacing.small else 0.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                TextField(
+                    value = draft,
+                    onValueChange = onDraftChange,
+                    modifier = Modifier.weight(1f).heightIn(min = 48.dp, max = 132.dp),
+                    minLines = 1,
+                    maxLines = 5,
                     placeholder = { Text("输入内容……") },
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(onSend = { if (draft.isNotBlank() && byteCount <= MAX_TEXT_BYTES) { onSend(); focusManager.clearFocus() } }),
-                    supportingText = if (byteCount > 90 * 1024) {{ Text("${(byteCount + 1023) / 1024} / 100 KB") }} else null,
-                    isError = byteCount > MAX_TEXT_BYTES, shape = MaterialTheme.shapes.large,
+                    isError = byteCount > MAX_TEXT_BYTES,
+                    shape = RoundedCornerShape(13.dp),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        errorIndicatorColor = Color.Transparent,
+                    ),
                 )
-                Button(onSend, enabled = draft.isNotBlank() && !sending && byteCount <= MAX_TEXT_BYTES, modifier = Modifier.height(56.dp), shape = MaterialTheme.shapes.medium) {
-                    if (sending) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) else Text("发送", fontWeight = FontWeight.SemiBold)
+                AnimatedContent(
+                    targetState = draft.isNotBlank(),
+                    transitionSpec = { fadeIn() togetherWith fadeOut() },
+                    label = "composer-action",
+                ) { hasText ->
+                    if (hasText) {
+                        Button(
+                            onClick = onSend,
+                            enabled = !sending && byteCount <= MAX_TEXT_BYTES,
+                            modifier = Modifier.height(48.dp).widthIn(min = 68.dp),
+                            shape = RoundedCornerShape(13.dp),
+                        ) {
+                            if (sending) CircularProgressIndicator(Modifier.size(19.dp), strokeWidth = 2.dp) else Text("发送", fontWeight = FontWeight.SemiBold)
+                        }
+                    } else {
+                        Surface(
+                            onClick = onAttachment,
+                            modifier = Modifier.size(48.dp),
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            contentColor = MaterialTheme.colorScheme.onSurface,
+                        ) { Box(contentAlignment = Alignment.Center) { Text("＋", fontSize = 27.sp, fontWeight = FontWeight.Light) } }
+                    }
                 }
+            }
+            if (byteCount > 90 * 1024) {
+                Text(
+                    "${(byteCount + 1023) / 1024} / 100 KB",
+                    modifier = Modifier.fillMaxWidth().padding(top = 3.dp, end = 59.dp),
+                    textAlign = TextAlign.End,
+                    color = if (byteCount > MAX_TEXT_BYTES) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelSmall,
+                )
             }
         }
     }
