@@ -373,11 +373,46 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
   const [pendingUploads, setPendingUploads] = useState<PendingUpload[]>([])
   const [dragging, setDragging] = useState(false)
   const [viewer, setViewer] = useState<{ images: TimelineMessage[], index: number } | null>(null)
+  const [isAtBottom, setIsAtBottom] = useState(true)
+  const [unreadCount, setUnreadCount] = useState(0)
+  const [scrollRequest, setScrollRequest] = useState<{ id: number, behavior: ScrollBehavior } | null>(null)
+  const timelineListRef = useRef<HTMLElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const photoInputRef = useRef<HTMLInputElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const synchronizingRef = useRef(false)
   const bufferedEventsRef = useRef<RealtimeEnvelope[]>([])
+  const isAtBottomRef = useRef(true)
+  const knownMessageIDsRef = useRef<Set<string>>(new Set())
+  const initialSyncCompleteRef = useRef(false)
+  const scrollRequestIDRef = useRef(0)
+
+  const requestScrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    isAtBottomRef.current = true
+    setIsAtBottom(true)
+    setUnreadCount(0)
+    scrollRequestIDRef.current += 1
+    setScrollRequest({ id: scrollRequestIDRef.current, behavior })
+  }, [])
+
+  useEffect(() => {
+    if (!scrollRequest) return
+    const container = timelineListRef.current
+    if (container) {
+      container.scrollTo({ top: container.scrollHeight, behavior: scrollRequest.behavior })
+    } else {
+      bottomRef.current?.scrollIntoView({ behavior: scrollRequest.behavior })
+    }
+  }, [scrollRequest])
+
+  const handleTimelineScroll = useCallback(() => {
+    const container = timelineListRef.current
+    if (!container) return
+    const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= 56
+    isAtBottomRef.current = atBottom
+    setIsAtBottom(atBottom)
+    if (atBottom) setUnreadCount(0)
+  }, [])
 
   const handleAuthError = useCallback((error: unknown) => {
     if (error instanceof ApiError && error.status === 401) {
@@ -387,10 +422,20 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
     return false
   }, [onSessionInvalid])
 
+  const acceptCreatedMessage = useCallback((createdMessage: TimelineMessage) => {
+    if (knownMessageIDsRef.current.has(createdMessage.id)) return
+    knownMessageIDsRef.current.add(createdMessage.id)
+    setMessages((current) => mergeMessages(current, [createdMessage]))
+    if (createdMessage.source_device_id === authSession.device_id || isAtBottomRef.current) {
+      requestScrollToBottom()
+    } else {
+      setUnreadCount((current) => current + 1)
+    }
+  }, [authSession.device_id, requestScrollToBottom])
+
   const applyRealtimeEvent = useCallback((event: RealtimeEnvelope) => {
     if (event.type === 'message.created' && isTimelineMessage(event.data)) {
-      const createdMessage = event.data
-      setMessages((current) => mergeMessages(current, [createdMessage]))
+      acceptCreatedMessage(event.data)
     } else if (event.type === 'message.deleted') {
       const messageID = (event.data as { message_id?: unknown })?.message_id
       if (typeof messageID === 'string') {
@@ -409,16 +454,28 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
     } else if (event.type === 'device.replaced') {
       onSessionInvalid()
     }
-  }, [onSessionInvalid])
+  }, [acceptCreatedMessage, onSessionInvalid])
 
   const loadLatest = useCallback(async (signal?: AbortSignal) => {
     synchronizingRef.current = true
     bufferedEventsRef.current = []
     try {
       const page = await request<MessagePage>('/api/v1/messages?limit=50', { signal })
+      const firstSync = !initialSyncCompleteRef.current
+      const newMessages = page.messages.filter((message) => !knownMessageIDsRef.current.has(message.id))
+      knownMessageIDsRef.current = new Set(page.messages.map((message) => message.id))
       setMessages(page.messages)
       setNextBefore(page.next_before || '')
       setErrorMessage('')
+      initialSyncCompleteRef.current = true
+      if (firstSync) {
+        requestScrollToBottom('auto')
+      } else if (newMessages.some((message) => message.source_device_id === authSession.device_id) || (newMessages.length > 0 && isAtBottomRef.current)) {
+        requestScrollToBottom()
+      } else {
+        const incomingCount = newMessages.filter((message) => message.source_device_id !== authSession.device_id).length
+        if (incomingCount > 0) setUnreadCount((current) => current + incomingCount)
+      }
     } catch (error) {
       if (isAbort(error) || handleAuthError(error)) return
       setErrorMessage(error instanceof Error ? error.message : '无法加载时间线。')
@@ -429,7 +486,7 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
       bufferedEventsRef.current = []
       buffered.forEach(applyRealtimeEvent)
     }
-  }, [applyRealtimeEvent, handleAuthError])
+  }, [applyRealtimeEvent, authSession.device_id, handleAuthError, requestScrollToBottom])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -492,6 +549,7 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
     setLoadingOlder(true)
     try {
       const page = await request<MessagePage>(`/api/v1/messages?limit=50&before=${encodeURIComponent(nextBefore)}`)
+      page.messages.forEach((message) => knownMessageIDsRef.current.add(message.id))
       setMessages((current) => mergeMessages(page.messages, current))
       setNextBefore(page.next_before || '')
     } catch (error) {
@@ -512,9 +570,8 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
         headers: { 'Content-Type': 'application/json; charset=utf-8' },
         body: JSON.stringify({ text: draft }),
       })
-      setMessages((current) => mergeMessages(current, [created]))
+      acceptCreatedMessage(created)
       setDraft('')
-      window.requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }))
     } catch (error) {
       if (!handleAuthError(error)) setErrorMessage(error instanceof Error ? error.message : '发送失败。')
     } finally {
@@ -562,6 +619,7 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
       const response = await request<{ target_message_id: string, messages: TimelineMessage[] }>(
         `/api/v1/messages/${encodeURIComponent(messageID)}/context`,
       )
+      knownMessageIDsRef.current = new Set(response.messages.map((message) => message.id))
       setMessages(response.messages)
       setNextBefore('')
       setHighlightedID(response.target_message_id)
@@ -603,15 +661,14 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
         pending.file.type || 'application/octet-stream',
         (progress) => updatePending(pending.id, { progress }),
       )
-      setMessages((current) => mergeMessages(current, [created]))
+      acceptCreatedMessage(created)
       updatePending(pending.id, { status: 'complete', progress: 100 })
       window.setTimeout(() => setPendingUploads((current) => current.filter((item) => item.id !== pending.id)), 650)
-      window.requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }))
     } catch (error) {
       if (handleAuthError(error)) return
       updatePending(pending.id, { status: 'failed', error: uploadErrorMessage(error) })
     }
-  }, [handleAuthError, updatePending])
+  }, [acceptCreatedMessage, handleAuthError, updatePending])
 
   const uploadSelectedFiles = useCallback(async (selected: File[]) => {
     const files = selected.filter((file) => file.size >= 0).slice(0, 21)
@@ -660,13 +717,21 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
   }
 
   const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
-    const images = Array.from(event.clipboardData.items)
-      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+    const itemFiles = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === 'file')
       .map((item) => item.getAsFile())
       .filter((file): file is File => file !== null)
-    if (images.length === 0) return
+    const candidates = itemFiles.length > 0 ? itemFiles : Array.from(event.clipboardData.files)
+    const seen = new Set<string>()
+    const files = candidates.filter((file) => {
+      const key = `${file.name}\u0000${file.size}\u0000${file.type}\u0000${file.lastModified}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    if (files.length === 0) return
     event.preventDefault()
-    void uploadSelectedFiles(images)
+    void uploadSelectedFiles(files)
   }
 
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {
@@ -706,7 +771,7 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
       </header>
 
       <main className="timeline-main">
-        <section className="timeline-list" aria-live="polite">
+        <section ref={timelineListRef} className="timeline-list" aria-live="polite" onScroll={handleTimelineScroll}>
           {nextBefore && (
             <button className="load-older" type="button" onClick={() => void loadOlder()} disabled={loadingOlder}>
               {loadingOlder ? '正在加载…' : '加载更早消息'}
@@ -757,6 +822,17 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
       </main>
 
       <div className="composer-region">
+        {!isAtBottom && (
+          <button
+            className={`scroll-to-bottom ${unreadCount > 0 ? 'scroll-to-bottom--unread' : ''}`}
+            type="button"
+            onClick={() => requestScrollToBottom()}
+            aria-label={unreadCount > 0 ? `有 ${unreadCount} 条新消息，滚动到底部` : '滚动到底部'}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v13M7 12l5 5 5-5" /></svg>
+            {unreadCount > 0 && <span>{unreadCount > 99 ? '99+' : unreadCount} 条新消息</span>}
+          </button>
+        )}
         {errorMessage && <div className="inline-error" role="alert">{errorMessage}</div>}
         <div className="composer">
           <button className="attachment-button" type="button" onClick={() => setAttachmentOpen(true)} title="添加照片或文件">＋</button>

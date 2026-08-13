@@ -17,6 +17,8 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -64,10 +66,13 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -86,6 +91,9 @@ import com.transdot.transferassistant.data.UploadProgress
 import com.transdot.transferassistant.ui.theme.AppSpacing
 import com.transdot.transferassistant.ui.theme.ThemeMode
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
@@ -235,10 +243,75 @@ private fun TimelineHome(
     onClearHighlight: () -> Unit,
 ) {
     val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
     val groups = remember(state.messages) { groupMessages(state.messages) }
-    LaunchedEffect(state.messages.size) {
-        if (state.messages.isNotEmpty() && listState.firstVisibleItemIndex >= (groups.size - 3).coerceAtLeast(0)) {
-            listState.animateScrollToItem((groups.size - 1).coerceAtLeast(0))
+    var isFollowingLatest by remember { mutableStateOf(true) }
+    var programmaticScroll by remember { mutableStateOf(false) }
+    var unreadCount by remember { mutableIntStateOf(0) }
+    var initialPositioned by remember { mutableStateOf(false) }
+    var previousNewestMessageId by remember { mutableStateOf<String?>(null) }
+    var knownMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    suspend fun scrollToBottom(animated: Boolean) {
+        val itemCount = snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > 0 }
+        val lastIndex = itemCount - 1
+        programmaticScroll = true
+        isFollowingLatest = true
+        try {
+            if (animated) listState.animateScrollToItem(lastIndex) else listState.scrollToItem(lastIndex)
+            val lastItem = listState.layoutInfo.visibleItemsInfo.lastOrNull { it.index == lastIndex }
+            val remaining = lastItem?.let {
+                it.offset + it.size - listState.layoutInfo.viewportEndOffset + listState.layoutInfo.afterContentPadding
+            }?.coerceAtLeast(0) ?: 0
+            if (remaining > 0) {
+                if (animated) listState.animateScrollBy(remaining.toFloat()) else listState.scrollBy(remaining.toFloat())
+            }
+            unreadCount = 0
+        } finally {
+            programmaticScroll = false
+        }
+    }
+
+    LaunchedEffect(listState) {
+        snapshotFlow { Triple(listState.isScrollInProgress, !listState.canScrollForward, programmaticScroll) }
+            .distinctUntilChanged()
+            .collect { (scrolling, atBottom, automatic) ->
+                if (scrolling && !automatic) isFollowingLatest = atBottom
+                if (atBottom) {
+                    isFollowingLatest = true
+                    unreadCount = 0
+                }
+            }
+    }
+    LaunchedEffect(state.isInitialLoading, state.messages, state.highlightedMessageId) {
+        if (state.isInitialLoading) return@LaunchedEffect
+        val newest = state.messages.lastOrNull()
+        val currentIds = state.messages.mapTo(mutableSetOf()) { it.id }
+        val addedMessages = state.messages.filterNot { it.id in knownMessageIds }
+        knownMessageIds = currentIds
+
+        if (!initialPositioned) {
+            initialPositioned = true
+            previousNewestMessageId = newest?.id
+            if (newest != null) scrollToBottom(animated = false)
+            return@LaunchedEffect
+        }
+        if (state.highlightedMessageId != null) {
+            previousNewestMessageId = newest?.id
+            return@LaunchedEffect
+        }
+        if (newest == null || newest.id == previousNewestMessageId || addedMessages.isEmpty()) return@LaunchedEffect
+
+        val previousIndex = previousNewestMessageId?.let { id -> state.messages.indexOfFirst { it.id == id } } ?: -1
+        val newTail = if (previousIndex >= 0) state.messages.drop(previousIndex + 1) else addedMessages
+        previousNewestMessageId = newest.id
+        if (newTail.isEmpty()) return@LaunchedEffect
+
+        val hasOwnMessage = newTail.any { it.sourceDeviceId == ownDeviceId }
+        if (hasOwnMessage || isFollowingLatest) {
+            scrollToBottom(animated = true)
+        } else {
+            unreadCount += newTail.count { it.sourceDeviceId != ownDeviceId }
         }
     }
     LaunchedEffect(state.highlightedMessageId) {
@@ -307,6 +380,37 @@ private fun TimelineHome(
                         CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.width(AppSpacing.medium))
                         Text(state.downloadProgress?.let { "正在下载 ${(it * 100).roundToInt()}%" } ?: "正在下载…")
+                    }
+                }
+            }
+            AnimatedVisibility(
+                visible = !isFollowingLatest,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = if (state.downloadMessageId == null) AppSpacing.medium else 76.dp),
+                enter = fadeIn(),
+                exit = fadeOut(),
+            ) {
+                Surface(
+                    onClick = { coroutineScope.launch { scrollToBottom(animated = true) } },
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    contentColor = MaterialTheme.colorScheme.primary,
+                    shadowElevation = 8.dp,
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = if (unreadCount > 0) AppSpacing.medium else 13.dp, vertical = 11.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(AppSpacing.small),
+                    ) {
+                        Text("↓", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        if (unreadCount > 0) {
+                            Text(
+                                "${unreadCount.coerceAtMost(99)}${if (unreadCount > 99) "+" else ""} 条新消息",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
                     }
                 }
             }

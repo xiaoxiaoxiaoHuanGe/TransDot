@@ -284,7 +284,33 @@ footer { min-height: 68px; display: flex; align-items: center; justify-content: 
 .timeline-placeholder--empty h2 { margin: 18px 0 8px; color: var(--text); font-size: 24px; letter-spacing: -.035em; }
 .empty-mark { width: 62px; height: 62px; display: grid; place-items: center; color: var(--accent); background: var(--accent-soft); border-radius: 21px; font-size: 18px; font-weight: 800; }
 
-.composer-region { flex: 0 0 auto; padding: 12px 0 18px; border-top: 1px solid var(--border); background: color-mix(in srgb, var(--background) 90%, transparent); }
+.composer-region { position: relative; flex: 0 0 auto; padding: 12px 0 18px; border-top: 1px solid var(--border); background: color-mix(in srgb, var(--background) 90%, transparent); }
+.scroll-to-bottom {
+  position: absolute;
+  z-index: 8;
+  top: 0;
+  left: 50%;
+  min-width: 44px;
+  height: 44px;
+  padding: 0 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: 0 10px 28px rgba(29, 38, 54, .18);
+  transform: translate(-50%, calc(-100% - 12px));
+  cursor: pointer;
+  animation: jump-button-in 160ms ease both;
+}
+.scroll-to-bottom:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 42%, var(--border)); }
+.scroll-to-bottom:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 28%, transparent); outline-offset: 2px; }
+.scroll-to-bottom svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.scroll-to-bottom span { color: var(--accent); font-size: 11px; font-weight: 760; white-space: nowrap; }
+.scroll-to-bottom--unread { border-color: color-mix(in srgb, var(--accent) 30%, var(--border)); }
 .composer { width: min(100%, 820px); min-height: 62px; margin: 0 auto; padding: 8px; display: flex; align-items: flex-end; gap: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 22px; box-shadow: 0 16px 45px rgba(29, 38, 54, .09); }
 .attachment-button { flex: 0 0 42px; width: 42px; height: 42px; color: var(--text-secondary); background: var(--surface-muted); border: 0; border-radius: 14px; font-size: 22px; }
 .attachment-button:disabled { opacity: .6; }
@@ -352,6 +378,7 @@ footer { min-height: 68px; display: flex; align-items: center; justify-content: 
 @keyframes backdrop-in { from { opacity: 0; } }
 @keyframes sheet-in { from { opacity: .5; transform: translateX(24px); } }
 @keyframes dialog-in { from { opacity: 0; transform: translateY(8px) scale(.97); } }
+@keyframes jump-button-in { from { opacity: 0; transform: translate(-50%, calc(-100% - 4px)) scale(.94); } }
 
 @media (max-width: 700px) {
   .timeline-shell { width: min(100% - 24px, 640px); }
