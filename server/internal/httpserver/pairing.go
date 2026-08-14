@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,7 +21,10 @@ type pairingActionRequest struct {
 
 func createPairingSession(service pairingService, limiter *attemptLimiter, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !limiter.Allow(remoteIP(r.RemoteAddr), time.Now()) {
+		allowed, retryAfter := limiter.AllowWithRetryAfter(remoteIP(r.RemoteAddr), time.Now())
+		if !allowed {
+			seconds := max(1, int((retryAfter+time.Second-1)/time.Second))
+			w.Header().Set("Retry-After", strconv.Itoa(seconds))
 			writeError(w, http.StatusTooManyRequests, "RATE_LIMITED", "Too many pairing sessions. Try again later.")
 			return
 		}

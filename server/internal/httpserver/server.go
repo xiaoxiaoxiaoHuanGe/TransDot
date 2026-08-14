@@ -233,6 +233,11 @@ func newAttemptLimiter(limit int, duration time.Duration) *attemptLimiter {
 }
 
 func (l *attemptLimiter) Allow(key string, now time.Time) bool {
+	allowed, _ := l.AllowWithRetryAfter(key, now)
+	return allowed
+}
+
+func (l *attemptLimiter) AllowWithRetryAfter(key string, now time.Time) (bool, time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.lastSweep.IsZero() || now.Sub(l.lastSweep) >= l.duration {
@@ -246,18 +251,18 @@ func (l *attemptLimiter) Allow(key string, now time.Time) bool {
 
 	window, exists := l.windows[key]
 	if !exists && len(l.windows) >= maxAttemptLimiterEntries {
-		return false
+		return false, l.duration
 	}
 	if !exists || now.Sub(window.started) >= l.duration {
 		l.windows[key] = attemptWindow{started: now, count: 1}
-		return true
+		return true, 0
 	}
 	if window.count >= l.limit {
-		return false
+		return false, window.started.Add(l.duration).Sub(now)
 	}
 	window.count++
 	l.windows[key] = window
-	return true
+	return true, 0
 }
 
 const maxAttemptLimiterEntries = 10_000
