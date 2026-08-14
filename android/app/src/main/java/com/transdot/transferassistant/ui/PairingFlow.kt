@@ -11,17 +11,19 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
@@ -31,6 +33,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -44,12 +47,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.transdot.transferassistant.R
+import com.transdot.transferassistant.ui.components.AppStatusPanel
+import com.transdot.transferassistant.ui.components.AppTopBar
+import com.transdot.transferassistant.ui.components.StatusTone
 import com.transdot.transferassistant.ui.theme.AppSpacing
 
 @Composable
@@ -131,7 +140,7 @@ private fun ScannerScreen(
 
     PairingScaffold(onBack = onBack, title = "扫描电脑二维码") {
         Text(
-            text = "将电脑网页上的二维码完整放入取景框。二维码包含高熵 Secret，比手输 6 位码更安全。",
+            text = "将电脑网页上的二维码完整放入取景框。扫码包含更完整的安全凭据，建议优先使用。",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -141,7 +150,7 @@ private fun ScannerScreen(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(420.dp)
+                    .heightIn(min = 300.dp, max = 420.dp)
                     .clip(MaterialTheme.shapes.large)
                     .background(Color.Black),
                 contentAlignment = Alignment.Center,
@@ -168,15 +177,12 @@ private fun ScannerScreen(
                 }
             }
         } else {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.large)
-                    .padding(AppSpacing.extraLarge),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(AppSpacing.medium),
-            ) {
-                Text("需要相机权限才能扫描二维码。", textAlign = TextAlign.Center)
+            Column(verticalArrangement = Arrangement.spacedBy(AppSpacing.medium)) {
+                AppStatusPanel(
+                    tone = StatusTone.Info,
+                    title = "需要相机权限",
+                    message = "相机只用于识别电脑上显示的配对二维码。",
+                )
                 Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) {
                     Text("允许相机权限")
                 }
@@ -206,7 +212,7 @@ private fun ManualCodeScreen(
 ) {
     PairingScaffold(onBack = onBack, title = "输入 6 位配对码") {
         Text(
-            text = "在电脑配对二维码下方找到 6 位数字。该方式受失败次数和 IP 限流保护。",
+            text = "在电脑配对二维码下方找到 6 位数字。配对码仅在当前会话短时间内有效。",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -221,8 +227,7 @@ private fun ManualCodeScreen(
             placeholder = { Text("538 219") },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
             textStyle = MaterialTheme.typography.headlineMedium.copy(
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 6.sp,
+                letterSpacing = 4.sp,
             ),
             shape = MaterialTheme.shapes.medium,
         )
@@ -243,7 +248,7 @@ private fun ManualCodeScreen(
                     strokeWidth = 2.dp,
                 )
             } else {
-                Text("确认配对", fontWeight = FontWeight.SemiBold)
+                Text("确认配对")
             }
         }
         TextButton(
@@ -269,27 +274,39 @@ private fun PairingSuccessScreen(onBack: () -> Unit) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .widthIn(max = 560.dp)
-                    .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.large)
-                    .padding(AppSpacing.extraLarge),
+                    .widthIn(max = 520.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(AppSpacing.large),
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(68.dp)
-                        .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(22.dp)),
-                    contentAlignment = Alignment.Center,
+                Surface(
+                    shape = MaterialTheme.shapes.large,
+                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
                 ) {
-                    Text("✓", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                    Box(Modifier.size(72.dp), contentAlignment = Alignment.Center) {
+                        androidx.compose.material3.Icon(
+                            painter = painterResource(R.drawable.ic_check),
+                            contentDescription = null,
+                            modifier = Modifier.size(32.dp),
+                        )
+                    }
                 }
-                Text("Windows 配对成功", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                 Text(
-                    "电脑已获得 HttpOnly Browser Token。服务端同时只保留一台有效 Windows。",
+                    "Windows 配对成功",
+                    modifier = Modifier.semantics { heading() },
+                    style = MaterialTheme.typography.headlineMedium,
+                )
+                Text(
+                    "电脑已获得安全浏览器凭据。服务端同时只保留一台有效 Windows。",
                     textAlign = TextAlign.Center,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyLarge,
                 )
-                Button(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("完成") }
+                Button(
+                    onClick = onBack,
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                    shape = MaterialTheme.shapes.medium,
+                ) { Text("完成") }
             }
         }
     }
@@ -306,24 +323,17 @@ private fun PairingScaffold(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .imePadding()
-                .padding(horizontal = AppSpacing.large, vertical = AppSpacing.medium),
+                .imePadding(),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onBack) { Text("返回") }
-                Text(
-                    title,
-                    modifier = Modifier.padding(start = AppSpacing.small),
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
+            AppTopBar(title = title, onBack = onBack)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .widthIn(max = 560.dp)
+                    .weight(1f)
+                    .widthIn(max = 520.dp)
                     .align(Alignment.CenterHorizontally)
-                    .padding(top = AppSpacing.large),
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = AppSpacing.extraLarge, vertical = AppSpacing.large),
                 content = content,
             )
         }
@@ -333,15 +343,11 @@ private fun PairingScaffold(
 @Composable
 private fun PairingError(message: String?) {
     AnimatedVisibility(visible = message != null) {
-        Text(
-            text = message.orEmpty(),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = AppSpacing.medium)
-                .background(MaterialTheme.colorScheme.errorContainer, RoundedCornerShape(12.dp))
-                .padding(AppSpacing.medium),
-            color = MaterialTheme.colorScheme.onErrorContainer,
-            style = MaterialTheme.typography.bodyMedium,
+        AppStatusPanel(
+            tone = StatusTone.Error,
+            title = "无法完成配对",
+            message = message.orEmpty(),
+            modifier = Modifier.padding(top = AppSpacing.medium),
         )
     }
 }
