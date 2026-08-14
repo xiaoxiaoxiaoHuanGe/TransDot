@@ -7,6 +7,7 @@ describe('pairingTransportGuidance', () => {
     ['http:', 'localhost'],
     ['http:', '127.0.0.1'],
     ['http:', '::1'],
+    ['http:', '[::1]'],
   ])('allows %s//%s', (protocol, hostname) => {
     expect(pairingTransportGuidance({ protocol, hostname, port: '5758' })).toBeNull()
   })

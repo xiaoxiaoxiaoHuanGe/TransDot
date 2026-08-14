@@ -1,5 +1,6 @@
 package com.transdot.transferassistant.ui
 
+import android.net.Uri
 import com.transdot.transferassistant.data.ClaimedSession
 import com.transdot.transferassistant.data.MessageContext
 import com.transdot.transferassistant.data.MessagePage
@@ -10,6 +11,7 @@ import com.transdot.transferassistant.data.TimelineEvent
 import com.transdot.transferassistant.data.TimelineMessage
 import com.transdot.transferassistant.data.TimelineRealtimeListener
 import com.transdot.transferassistant.data.TimelineRepository
+import com.transdot.transferassistant.data.UploadProgress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -85,6 +87,21 @@ class TimelineViewModelTest {
         assertTrue(repository.connectionClosed)
     }
 
+    @Test
+    fun retryUploadContainsOnlyFilesThatDidNotComplete() = runTest(dispatcher.scheduler) {
+        val repository = RetryTimelineRepository()
+        val viewModel = TimelineViewModel(repository, FakeSessionStore())
+        val files = listOf(Uri.EMPTY, Uri.EMPTY)
+
+        viewModel.uploadFiles(files)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, viewModel.uiState.value.retryUploadUris.size)
+        viewModel.retryUpload()
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(listOf(2, 1), repository.uploadBatchSizes)
+    }
+
     private class FakeTimelineRepository(initial: TimelineMessage) : TimelineRepository {
         private var current = listOf(initial)
         private var listener: TimelineRealtimeListener? = null
@@ -127,6 +144,24 @@ class TimelineViewModelTest {
                 else -> Unit
             }
             listener?.onEvent(event)
+        }
+    }
+
+    private class RetryTimelineRepository : TimelineRepository {
+        val uploadBatchSizes = mutableListOf<Int>()
+
+        override suspend fun list(session: StoredSession, before: String?) = MessagePage(emptyList(), null)
+        override suspend fun sendText(session: StoredSession, text: String) = error("unused")
+        override suspend fun delete(session: StoredSession, messageId: String) = Unit
+        override suspend fun search(session: StoredSession, query: String) = emptyList<TimelineMessage>()
+        override suspend fun context(session: StoredSession, messageId: String) = MessageContext(messageId, emptyList())
+        override fun connect(session: StoredSession, listener: TimelineRealtimeListener) = object : RealtimeConnection { override fun close() = Unit }
+
+        override suspend fun upload(session: StoredSession, uris: List<Uri>, progress: (UploadProgress) -> Unit): List<TimelineMessage> {
+            uploadBatchSizes += uris.size
+            progress(UploadProgress("upload-1", "first", 1, 1, "complete", sourceUri = uris.first(), sourceIndex = 0))
+            if (uploadBatchSizes.size == 1) error("second file failed")
+            return emptyList()
         }
     }
 

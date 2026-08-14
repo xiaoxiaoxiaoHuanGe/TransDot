@@ -14,6 +14,7 @@ import com.transdot.transferassistant.data.TimelineFailure
 import com.transdot.transferassistant.data.TimelineMessage
 import com.transdot.transferassistant.data.TimelineRealtimeListener
 import com.transdot.transferassistant.data.TimelineRepository
+import com.transdot.transferassistant.data.TransferNotifier
 import com.transdot.transferassistant.data.UploadProgress
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -28,6 +29,8 @@ enum class TimelineConnectionState {
     Connected,
     Offline,
 }
+
+data class CompletedDownload(val message: TimelineMessage, val destination: Uri)
 
 data class TimelineUiState(
     val messages: List<TimelineMessage> = emptyList(),
@@ -51,11 +54,13 @@ data class TimelineUiState(
     val retryUploadUris: List<Uri> = emptyList(),
     val downloadMessageId: String? = null,
     val downloadProgress: Float? = null,
+    val completedDownload: CompletedDownload? = null,
 )
 
 class TimelineViewModel(
     private val repository: TimelineRepository,
     sessionStore: SessionStore,
+    private val notifier: TransferNotifier = TransferNotifier.None,
 ) : ViewModel() {
     private val session: StoredSession? = sessionStore.load()
     private val mutableUiState = MutableStateFlow(
@@ -74,6 +79,7 @@ class TimelineViewModel(
     private var refreshJob: Job? = null
     private var synchronizationInProgress = false
     private val bufferedEvents = mutableListOf<TimelineEvent>()
+    private val retryUploadCandidates = linkedMapOf<Int, Uri>()
 
     fun start() {
         if (started || session == null) return
@@ -120,6 +126,8 @@ class TimelineViewModel(
     fun uploadFiles(uris: List<Uri>) {
         val activeSession = session ?: return
         if (uris.isEmpty() || mutableUiState.value.isUploading) return
+        retryUploadCandidates.clear()
+        uris.forEachIndexed { index, uri -> retryUploadCandidates[index] = uri }
         mutableUiState.update {
             it.copy(isUploading = true, uploads = emptyList(), retryUploadUris = uris, errorMessage = null)
         }
@@ -127,10 +135,16 @@ class TimelineViewModel(
             runCatching {
                 repository.upload(activeSession, uris) { progress ->
                     mutableUiState.update { state ->
-                        state.copy(uploads = (state.uploads.filterNot { it.uploadId == progress.uploadId } + progress))
+                        if (progress.state == "complete") progress.sourceIndex?.let(retryUploadCandidates::remove)
+                        state.copy(
+                            uploads = state.uploads.filterNot { it.uploadId == progress.uploadId } + progress,
+                            retryUploadUris = retryUploadCandidates.values.toList(),
+                        )
                     }
                 }
             }.onSuccess { created ->
+                retryUploadCandidates.clear()
+                notifier.uploadFinished(created.size, 0)
                 mutableUiState.update {
                     it.copy(
                         messages = mergeMessages(it.messages, created),
@@ -141,6 +155,7 @@ class TimelineViewModel(
                 delay(700)
                 mutableUiState.update { it.copy(uploads = emptyList()) }
             }.onFailure { failure ->
+                notifier.uploadFinished(uris.size - retryUploadCandidates.size, retryUploadCandidates.size)
                 handleFailure(failure) { it.copy(isUploading = false) }
             }
         }
@@ -163,11 +178,23 @@ class TimelineViewModel(
                     }
                 }
             }.onSuccess {
-                mutableUiState.update { it.copy(downloadMessageId = null, downloadProgress = null) }
+                notifier.downloadFinished(message.file?.originalFilename ?: "文件", true)
+                mutableUiState.update {
+                    it.copy(
+                        downloadMessageId = null,
+                        downloadProgress = null,
+                        completedDownload = CompletedDownload(message, destination),
+                    )
+                }
             }.onFailure { failure ->
+                notifier.downloadFinished(message.file?.originalFilename ?: "文件", false)
                 handleFailure(failure) { it.copy(downloadMessageId = null, downloadProgress = null) }
             }
         }
+    }
+
+    fun clearCompletedDownload() {
+        mutableUiState.update { it.copy(completedDownload = null) }
     }
 
     suspend fun loadImage(message: TimelineMessage, original: Boolean): Bitmap? {
@@ -423,11 +450,12 @@ class TimelineViewModel(
     class Factory(
         private val repository: TimelineRepository,
         private val sessionStore: SessionStore,
+        private val notifier: TransferNotifier = TransferNotifier.None,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             require(modelClass.isAssignableFrom(TimelineViewModel::class.java))
-            return TimelineViewModel(repository, sessionStore) as T
+            return TimelineViewModel(repository, sessionStore, notifier) as T
         }
     }
 

@@ -11,6 +11,8 @@ RUN npm run build
 
 
 FROM ${OFFICIAL_IMAGE_REGISTRY}/golang:1.26-alpine AS server-builder
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
 WORKDIR /src/server
 
 COPY server/go.mod server/go.sum ./

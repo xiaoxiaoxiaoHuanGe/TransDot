@@ -58,7 +58,16 @@ data class TimelineMessage(
 
 data class MessagePage(val messages: List<TimelineMessage>, val nextBefore: String?)
 data class MessageContext(val targetMessageId: String, val messages: List<TimelineMessage>)
-data class UploadProgress(val uploadId: String, val filename: String, val bytesSent: Long, val totalBytes: Long, val state: String, val error: String? = null)
+data class UploadProgress(
+    val uploadId: String,
+    val filename: String,
+    val bytesSent: Long,
+    val totalBytes: Long,
+    val state: String,
+    val error: String? = null,
+    val sourceUri: Uri? = null,
+    val sourceIndex: Int? = null,
+)
 
 sealed interface TimelineEvent {
     data class Created(val message: TimelineMessage) : TimelineEvent
@@ -155,20 +164,20 @@ class NetworkTimelineRepository(
             sources.forEachIndexed { index, source ->
                 val ticket = tickets.getJSONObject(index)
                 val uploadId = ticket.getString("upload_id")
-                progress(UploadProgress(uploadId, source.filename, 0, source.size, "preparing"))
+                progress(UploadProgress(uploadId, source.filename, 0, source.size, "preparing", sourceUri = source.uri, sourceIndex = index))
                 ticket.optString("thumbnail_upload_url").takeIf(String::isNotBlank)?.let { path ->
                     val thumbnail = createThumbnail(resolver, source.uri)
                     executeBinary(session, path, thumbnail.toRequestBody(JPEG_MEDIA_TYPE))
                 }
                 val requestBody = StreamingRequestBody(resolver, source) { sent ->
-                    progress(UploadProgress(uploadId, source.filename, sent, source.size, "uploading"))
+                    progress(UploadProgress(uploadId, source.filename, sent, source.size, "uploading", sourceUri = source.uri, sourceIndex = index))
                 }
                 try {
                     val response = executeBinary(session, ticket.getString("upload_url"), requestBody)
                     add(parseMessage(parseObject(response)))
-                    progress(UploadProgress(uploadId, source.filename, source.size, source.size, "complete"))
+                    progress(UploadProgress(uploadId, source.filename, source.size, source.size, "complete", sourceUri = source.uri, sourceIndex = index))
                 } catch (failure: Throwable) {
-                    progress(UploadProgress(uploadId, source.filename, 0, source.size, "failed", failure.message))
+                    progress(UploadProgress(uploadId, source.filename, 0, source.size, "failed", failure.message, source.uri, index))
                     throw failure
                 }
             }

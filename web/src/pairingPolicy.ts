@@ -1,6 +1,6 @@
 export type PairingLocation = Pick<Location, 'protocol' | 'hostname' | 'port'>
 
-const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1'])
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]'])
 
 export function pairingTransportGuidance(location: PairingLocation) {
   if (location.protocol === 'https:' || LOOPBACK_HOSTS.has(location.hostname.toLowerCase())) return null

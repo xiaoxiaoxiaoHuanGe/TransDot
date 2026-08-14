@@ -1,8 +1,10 @@
 import { ChangeEvent, ClipboardEvent, DragEvent, FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
+import { instanceHostLabel, pairingTransportGuidance, parseRetryAfterSeconds } from './pairingPolicy'
+import { DownloadDirectory, downloadFilesToDirectory, fileFingerprint, partitionRepeatedFiles } from './transferTools'
 
 type PairingStatus = 'pending' | 'approved' | 'rejected' | 'expired' | 'consumed'
-type ScreenState = 'loading' | 'pairing' | 'paired' | 'rejected' | 'expired' | 'replaced' | 'error'
+type ScreenState = 'loading' | 'pairing' | 'paired' | 'rejected' | 'expired' | 'replaced' | 'insecure' | 'error'
 type ConnectionState = 'connecting' | 'connected' | 'offline'
 
 type PairingSession = {
@@ -94,12 +96,14 @@ type ErrorEnvelope = {
 class ApiError extends Error {
   status: number
   code?: string
+  retryAfterSeconds?: number
 
-  constructor(message: string, status: number, code?: string) {
+  constructor(message: string, status: number, code?: string, retryAfterSeconds?: number) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.code = code
+    this.retryAfterSeconds = retryAfterSeconds
   }
 }
 
@@ -115,11 +119,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   })
   if (!response.ok) {
     const body = await response.json().catch(() => ({})) as ErrorEnvelope
-    throw new ApiError(body.error?.message || `请求失败（HTTP ${response.status}）`, response.status, body.error?.code)
+    const retryAfterSeconds = response.status === httpStatusTooManyRequests
+      ? parseRetryAfterSeconds(response.headers.get('Retry-After'))
+      : undefined
+    throw new ApiError(body.error?.message || `请求失败（HTTP ${response.status}）`, response.status, body.error?.code, retryAfterSeconds)
   }
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
 }
+
+const httpStatusTooManyRequests = 429
 
 function isAbort(error: unknown) {
   return error instanceof DOMException && error.name === 'AbortError'
@@ -210,11 +219,26 @@ function App() {
   const [session, setSession] = useState<PairingSession | null>(null)
   const [authSession, setAuthSession] = useState<AuthSession | null>(null)
   const [errorMessage, setErrorMessage] = useState('')
+  const [retryAfterSeconds, setRetryAfterSeconds] = useState(0)
   const [now, setNow] = useState(() => Date.now())
+  const creatingSessionRef = useRef(false)
 
   const createSession = useCallback(async (signal?: AbortSignal) => {
+    if (creatingSessionRef.current) return
+    const transportGuidance = pairingTransportGuidance(window.location)
+    if (transportGuidance) {
+      setSession(null)
+      setAuthSession(null)
+      setRetryAfterSeconds(0)
+      setErrorMessage(transportGuidance)
+      setScreen('insecure')
+      return
+    }
+
+    creatingSessionRef.current = true
     setScreen('loading')
     setErrorMessage('')
+    setRetryAfterSeconds(0)
     setAuthSession(null)
     try {
       const nextSession = await request<PairingSession>('/api/v1/pairing/sessions', {
@@ -227,7 +251,12 @@ function App() {
     } catch (error) {
       if (isAbort(error)) return
       setErrorMessage(error instanceof Error ? error.message : '无法创建配对会话。')
+      setRetryAfterSeconds(error instanceof ApiError && error.status === httpStatusTooManyRequests
+        ? error.retryAfterSeconds ?? 120
+        : 0)
       setScreen('error')
+    } finally {
+      creatingSessionRef.current = false
     }
   }, [])
 
@@ -294,6 +323,14 @@ function App() {
     return () => window.clearInterval(timer)
   }, [screen])
 
+  useEffect(() => {
+    if (retryAfterSeconds <= 0) return
+    const timer = window.setInterval(() => {
+      setRetryAfterSeconds((current) => Math.max(0, current - 1))
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [retryAfterSeconds > 0])
+
   const secondsRemaining = useMemo(() => {
     if (!session) return 0
     return Math.max(0, Math.ceil((new Date(session.expires_at).getTime() - now) / 1000))
@@ -318,7 +355,10 @@ function App() {
         <Brand />
         <span className={`status-pill status-pill--${screen}`}>
           <span className="status-dot" aria-hidden="true" />
-          {screen === 'pairing' ? '等待手机确认' : screen === 'replaced' ? '浏览器已被替换' : '安全连接'}
+          {screen === 'pairing' ? '等待手机确认'
+            : screen === 'replaced' ? '浏览器已被替换'
+              : screen === 'insecure' ? '需要 HTTPS'
+                : '安全连接'}
         </span>
       </header>
 
@@ -327,20 +367,23 @@ function App() {
         {screen === 'pairing' && session && (
           <PairingCard session={session} secondsRemaining={secondsRemaining} />
         )}
-        {(screen === 'expired' || screen === 'rejected' || screen === 'replaced' || screen === 'error') && (
+        {(screen === 'expired' || screen === 'rejected' || screen === 'replaced' || screen === 'insecure' || screen === 'error') && (
           <RetryState
             title={
               screen === 'expired' ? '配对码已过期'
                 : screen === 'rejected' ? '手机已拒绝配对'
                   : screen === 'replaced' ? '这台 Windows 已被替换'
+                    : screen === 'insecure' ? '此地址无法安全配对'
                     : '暂时无法连接'
             }
             message={
-              screen === 'error' ? errorMessage
+              (screen === 'error' || screen === 'insecure') ? errorMessage
                 : screen === 'replaced' ? 'Android Master 已授权另一台 Windows。重新配对会再次请求手机确认。'
                   : '生成新的二维码后，再用 Android Master 扫描确认。'
             }
             onRetry={() => void createSession()}
+            retryAfterSeconds={screen === 'error' ? retryAfterSeconds : 0}
+            retryAllowed={screen !== 'insecure'}
           />
         )}
       </main>
@@ -372,6 +415,11 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
   const [actionNotice, setActionNotice] = useState('')
   const [attachmentOpen, setAttachmentOpen] = useState(false)
   const [pendingUploads, setPendingUploads] = useState<PendingUpload[]>([])
+  const [pasteDuplicates, setPasteDuplicates] = useState<{ fresh: File[], repeated: File[] } | null>(null)
+  const [downloadSelectionOpen, setDownloadSelectionOpen] = useState(false)
+  const [selectedDownloadIDs, setSelectedDownloadIDs] = useState<Set<string>>(new Set())
+  const [batchDownloading, setBatchDownloading] = useState(false)
+  const [batchDownloadReport, setBatchDownloadReport] = useState<{ success: string[], failed: string[] } | null>(null)
   const [dragging, setDragging] = useState(false)
   const [viewer, setViewer] = useState<{ images: TimelineMessage[], index: number } | null>(null)
   const [isAtBottom, setIsAtBottom] = useState(true)
@@ -387,6 +435,8 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
   const knownMessageIDsRef = useRef<Set<string>>(new Set())
   const initialSyncCompleteRef = useRef(false)
   const scrollRequestIDRef = useRef(0)
+  const uploadedFileFingerprintCountsRef = useRef<Map<string, number>>(new Map())
+  const batchDownloadAbortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
     if (!actionNotice) return
@@ -684,7 +734,22 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
     setPendingUploads((current) => current.map((item) => item.id === id ? { ...item, ...update } : item))
   }, [])
 
+  const registerFileFingerprint = useCallback((file: File) => {
+    const fingerprint = fileFingerprint(file)
+    const counts = uploadedFileFingerprintCountsRef.current
+    counts.set(fingerprint, (counts.get(fingerprint) || 0) + 1)
+  }, [])
+
+  const unregisterFileFingerprint = useCallback((file: File) => {
+    const fingerprint = fileFingerprint(file)
+    const counts = uploadedFileFingerprintCountsRef.current
+    const nextCount = (counts.get(fingerprint) || 0) - 1
+    if (nextCount <= 0) counts.delete(fingerprint)
+    else counts.set(fingerprint, nextCount)
+  }, [])
+
   const performUpload = useCallback(async (pending: PendingUpload) => {
+    if (pending.status === 'failed') registerFileFingerprint(pending.file)
     updatePending(pending.id, { status: 'preparing', progress: 0, error: undefined })
     try {
       if (pending.ticket.kind === 'image' && pending.ticket.thumbnail_upload_url) {
@@ -702,10 +767,11 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
       updatePending(pending.id, { status: 'complete', progress: 100 })
       window.setTimeout(() => setPendingUploads((current) => current.filter((item) => item.id !== pending.id)), 650)
     } catch (error) {
+      unregisterFileFingerprint(pending.file)
       if (handleAuthError(error)) return
       updatePending(pending.id, { status: 'failed', error: uploadErrorMessage(error) })
     }
-  }, [acceptCreatedMessage, handleAuthError, updatePending])
+  }, [acceptCreatedMessage, handleAuthError, registerFileFingerprint, unregisterFileFingerprint, updatePending])
 
   const uploadSelectedFiles = useCallback(async (selected: File[]) => {
     const files = selected.filter((file) => file.size >= 0).slice(0, 21)
@@ -724,6 +790,7 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
     }
     setAttachmentOpen(false)
     setErrorMessage('')
+    files.forEach(registerFileFingerprint)
     try {
       const batch = await request<UploadBatch>('/api/v1/upload-batches', {
         method: 'POST',
@@ -743,9 +810,10 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
       setPendingUploads((current) => [...current, ...pending])
       for (const item of pending) await performUpload(item)
     } catch (error) {
+      files.forEach(unregisterFileFingerprint)
       if (!handleAuthError(error)) setErrorMessage(uploadErrorMessage(error))
     }
-  }, [handleAuthError, performUpload])
+  }, [handleAuthError, performUpload, registerFileFingerprint, unregisterFileFingerprint])
 
   const handleFileInput = (event: ChangeEvent<HTMLInputElement>) => {
     const selected = Array.from(event.target.files || [])
@@ -759,16 +827,14 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
       .map((item) => item.getAsFile())
       .filter((file): file is File => file !== null)
     const candidates = itemFiles.length > 0 ? itemFiles : Array.from(event.clipboardData.files)
-    const seen = new Set<string>()
-    const files = candidates.filter((file) => {
-      const key = `${file.name}\u0000${file.size}\u0000${file.type}\u0000${file.lastModified}`
-      if (seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
-    if (files.length === 0) return
+    const partition = partitionRepeatedFiles(candidates, new Set(uploadedFileFingerprintCountsRef.current.keys()))
+    if (partition.fresh.length === 0 && partition.repeated.length === 0) return
     event.preventDefault()
-    void uploadSelectedFiles(files)
+    if (partition.repeated.length > 0) {
+      setPasteDuplicates(partition)
+      return
+    }
+    void uploadSelectedFiles(partition.fresh)
   }
 
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {
@@ -777,6 +843,90 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
     const files = Array.from(event.dataTransfer.files)
     if (files.length > 0) void uploadSelectedFiles(files)
   }
+
+  const downloadableMessages = useMemo(
+    () => messages.filter((message) => message.file?.status === 'available'),
+    [messages],
+  )
+
+  useEffect(() => {
+    const availableIDs = new Set(downloadableMessages.map((message) => message.id))
+    setSelectedDownloadIDs((current) => {
+      const retained = new Set(Array.from(current).filter((id) => availableIDs.has(id)))
+      return retained.size === current.size ? current : retained
+    })
+  }, [downloadableMessages])
+
+  const toggleDownloadSelection = useCallback((messageIDs: string[]) => {
+    setSelectedDownloadIDs((current) => {
+      const next = new Set(current)
+      const shouldSelect = messageIDs.some((id) => !next.has(id))
+      messageIDs.forEach((id) => shouldSelect ? next.add(id) : next.delete(id))
+      return next
+    })
+  }, [])
+
+  const closeDownloadSelection = useCallback(() => {
+    if (batchDownloading) return
+    setDownloadSelectionOpen(false)
+    setSelectedDownloadIDs(new Set())
+  }, [batchDownloading])
+
+  const startBatchDownload = useCallback(async () => {
+    const selected = downloadableMessages.filter((message) => selectedDownloadIDs.has(message.id))
+    if (selected.length === 0 || batchDownloading) return
+    const picker = (window as Window & {
+      showDirectoryPicker?: (options?: { id?: string, mode?: 'read' | 'readwrite' }) => Promise<unknown>
+    }).showDirectoryPicker
+    if (!picker || !window.isSecureContext) {
+      setActionNotice('当前浏览器不支持目录保存，将逐个下载；请允许多文件下载。')
+      selected.forEach((message, index) => {
+        window.setTimeout(() => {
+          const anchor = document.createElement('a')
+          anchor.href = message.file?.download_url || ''
+          anchor.download = message.file?.original_filename || 'download'
+          anchor.click()
+        }, index * 180)
+      })
+      closeDownloadSelection()
+      return
+    }
+    try {
+      const directory = await picker({ id: 'transdot-downloads', mode: 'readwrite' }) as DownloadDirectory
+      const controller = new AbortController()
+      batchDownloadAbortRef.current = controller
+      setBatchDownloading(true)
+      const results = await downloadFilesToDirectory(
+        selected.map((message) => ({
+          filename: message.file?.original_filename || 'download',
+          url: message.file?.download_url || '',
+        })),
+        directory,
+        fetch,
+        controller.signal,
+      )
+      if (controller.signal.aborted) {
+        setActionNotice('已取消批量下载。')
+      } else {
+        const successCount = results.filter((result) => result.status === 'fulfilled').length
+        const failureCount = results.length - successCount
+        setBatchDownloadReport({
+          success: results.filter((result) => result.status === 'fulfilled').map((result) => result.filename),
+          failed: results.filter((result) => result.status === 'rejected').map((result) => result.source.filename),
+        })
+        setActionNotice(failureCount === 0
+          ? `已保存 ${successCount} 个文件。`
+          : `已保存 ${successCount} 个，${failureCount} 个失败。`)
+      }
+      setDownloadSelectionOpen(false)
+      setSelectedDownloadIDs(new Set())
+    } catch (error) {
+      if (!isAbort(error)) setErrorMessage(error instanceof Error ? error.message : '无法批量下载文件。')
+    } finally {
+      batchDownloadAbortRef.current = null
+      setBatchDownloading(false)
+    }
+  }, [batchDownloading, closeDownloadSelection, downloadableMessages, selectedDownloadIDs])
 
   const groupedMessages = useMemo(() => groupTimelineMessages(messages), [messages])
 
@@ -801,9 +951,34 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
           <span className={`connection-badge connection-badge--${connection}`}>
             <span />{connection === 'connected' ? '实时连接' : connection === 'connecting' ? '正在连接' : '等待重连'}
           </span>
-          <button className="icon-button" type="button" onClick={() => setSearchOpen(true)} aria-label="搜索消息">
-            <SearchIcon />
-          </button>
+          {downloadSelectionOpen ? (
+            <>
+              <button
+                className="batch-action"
+                type="button"
+                disabled={batchDownloading || downloadableMessages.length === 0}
+                onClick={() => setSelectedDownloadIDs((current) => current.size === downloadableMessages.length
+                  ? new Set()
+                  : new Set(downloadableMessages.map((message) => message.id)))}
+              >
+                {selectedDownloadIDs.size === downloadableMessages.length && downloadableMessages.length > 0 ? '取消全选' : '全选'}
+              </button>
+              <span className="selection-count">已选 {selectedDownloadIDs.size}</span>
+              <button className="batch-action batch-action--primary" type="button" disabled={selectedDownloadIDs.size === 0 || batchDownloading} onClick={() => void startBatchDownload()}>
+                {batchDownloading ? '保存中…' : '保存到文件夹'}
+              </button>
+              <button className="batch-action" type="button" onClick={batchDownloading ? () => batchDownloadAbortRef.current?.abort() : closeDownloadSelection}>
+                {batchDownloading ? '取消下载' : '退出'}
+              </button>
+            </>
+          ) : (
+            <>
+              <button className="batch-action" type="button" disabled={downloadableMessages.length === 0} onClick={() => setDownloadSelectionOpen(true)}>批量下载</button>
+              <button className="icon-button" type="button" onClick={() => setSearchOpen(true)} aria-label="搜索消息">
+                <SearchIcon />
+              </button>
+            </>
+          )}
         </div>
       </header>
 
@@ -838,19 +1013,26 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
                       <time dateTime={message.created_at}>{formatMessageTime(message.created_at)}</time>
                     </div>
                     <div className="message-body-line">
-                      <MessageActions
-                        onCopy={() => void copyMessages(group.messages)}
-                        onDelete={() => setDeleteTargets(group.messages)}
-                        copyLabel={group.messages.length > 1 ? '复制这组文件名' : '复制消息'}
-                        deleteLabel={group.messages.length > 1 ? '删除这组消息' : '删除消息'}
-                      />
+                      {!downloadSelectionOpen && (
+                        <MessageActions
+                          onCopy={() => void copyMessages(group.messages)}
+                          onDelete={() => setDeleteTargets(group.messages)}
+                          copyLabel={group.messages.length > 1 ? '复制这组文件名' : '复制消息'}
+                          deleteLabel={group.messages.length > 1 ? '删除这组消息' : '删除消息'}
+                        />
+                      )}
                       {group.kind === 'images' ? (
                         <ImageGrid
                           messages={group.messages}
                           onOpen={(index) => setViewer({ images: group.messages, index })}
+                          selection={downloadSelectionOpen ? { selectedIDs: selectedDownloadIDs, onToggle: (id) => toggleDownloadSelection([id]) } : undefined}
                         />
                       ) : (
-                        <MessageCard message={message} onOpenImage={() => setViewer({ images: [message], index: 0 })} />
+                        <MessageCard
+                          message={message}
+                          onOpenImage={() => setViewer({ images: [message], index: 0 })}
+                          selection={downloadSelectionOpen ? { selected: selectedDownloadIDs.has(message.id), onToggle: () => toggleDownloadSelection([message.id]) } : undefined}
+                        />
                       )}
                     </div>
                   </article>
@@ -949,6 +1131,44 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
         </div>
       )}
 
+      {pasteDuplicates && (
+        <div className="sheet-backdrop sheet-backdrop--center" role="presentation">
+          <div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="duplicate-title">
+            <h2 id="duplicate-title">检测到重复粘贴</h2>
+            <p>
+              以下 {pasteDuplicates.repeated.length} 个文件已在本次页面会话中排队或上传：
+              <strong className="duplicate-files">{pasteDuplicates.repeated.map((file) => file.name).join('、')}</strong>
+            </p>
+            <div>
+              <button type="button" onClick={() => setPasteDuplicates(null)}>取消</button>
+              <button type="button" onClick={() => {
+                const fresh = pasteDuplicates.fresh
+                setPasteDuplicates(null)
+                void uploadSelectedFiles(fresh)
+              }} disabled={pasteDuplicates.fresh.length === 0}>只上传新文件</button>
+              <button className="primary-button" type="button" onClick={() => {
+                const files = [...pasteDuplicates.fresh, ...pasteDuplicates.repeated]
+                setPasteDuplicates(null)
+                void uploadSelectedFiles(files)
+              }}>仍然上传全部</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {batchDownloadReport && (
+        <div className="sheet-backdrop sheet-backdrop--center" role="presentation">
+          <div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="download-report-title">
+            <h2 id="download-report-title">批量下载结果</h2>
+            <p>
+              成功 {batchDownloadReport.success.length} 个，失败 {batchDownloadReport.failed.length} 个。
+              {batchDownloadReport.failed.length > 0 && <strong className="duplicate-files">失败：{batchDownloadReport.failed.join('、')}</strong>}
+            </p>
+            <div><button className="primary-button" type="button" onClick={() => setBatchDownloadReport(null)}>完成</button></div>
+          </div>
+        </div>
+      )}
+
       {deleteTargets.length > 0 && (
         <div className="sheet-backdrop sheet-backdrop--center" role="presentation">
           <div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-title">
@@ -1004,24 +1224,46 @@ function MessageActions({ onCopy, onDelete, copyLabel, deleteLabel }: { onCopy: 
   )
 }
 
-function MessageCard({ message, onOpenImage }: { message: TimelineMessage, onOpenImage: () => void }) {
+function MessageCard({
+  message,
+  onOpenImage,
+  selection,
+}: {
+  message: TimelineMessage,
+  onOpenImage: () => void,
+  selection?: { selected: boolean, onToggle: () => void },
+}) {
   if (message.type === 'text') {
     return <div className="message-bubble"><p>{message.text_content}</p></div>
   }
   if (message.type === 'image') {
-    return <ImageGrid messages={[message]} onOpen={onOpenImage} />
+    return <ImageGrid messages={[message]} onOpen={onOpenImage} selection={selection ? { selectedIDs: selection.selected ? new Set([message.id]) : new Set<string>(), onToggle: selection.onToggle } : undefined} />
   }
   const file = message.file
   return (
-    <div className="file-card">
+    <div className={`file-card ${selection?.selected ? 'download-selected' : ''}`}>
+      {selection && file?.status === 'available' && (
+        <label className="download-check" aria-label={`选择 ${file.original_filename}`}>
+          <input type="checkbox" checked={selection.selected} onChange={selection.onToggle} />
+          <span aria-hidden="true">✓</span>
+        </label>
+      )}
       <span className="file-icon">{fileExtension(file?.original_filename || '')}</span>
       <div className="file-copy"><strong title={file?.original_filename}>{file?.original_filename || '文件'}</strong><span>{formatBytes(file?.size_bytes || 0)} · {fileStatusLabel(file)}</span></div>
-      {file?.status === 'available' ? <a className="file-action" href={file.download_url} download>下载</a> : <span className="file-action file-action--disabled">已过期</span>}
+      {!selection && (file?.status === 'available' ? <a className="file-action" href={file.download_url} download>下载</a> : <span className="file-action file-action--disabled">已过期</span>)}
     </div>
   )
 }
 
-function ImageGrid({ messages, onOpen }: { messages: TimelineMessage[], onOpen: (index: number) => void }) {
+function ImageGrid({
+  messages,
+  onOpen,
+  selection,
+}: {
+  messages: TimelineMessage[],
+  onOpen: (index: number) => void,
+  selection?: { selectedIDs: ReadonlySet<string>, onToggle: (id: string) => void },
+}) {
   const visible = messages.slice(0, 6)
   return (
     <div className={`image-grid image-grid--${Math.min(messages.length, 5)}`}>
@@ -1029,12 +1271,18 @@ function ImageGrid({ messages, onOpen }: { messages: TimelineMessage[], onOpen: 
         const file = message.file
         const expired = file?.status !== 'available'
         return (
-          <div className="image-tile" key={message.id}>
+          <div className={`image-tile ${selection?.selectedIDs.has(message.id) ? 'download-selected' : ''}`} key={message.id}>
             <button type="button" onClick={() => onOpen(index)} disabled={!file?.thumbnail_url && expired}>
               {file?.thumbnail_url ? <img src={file.thumbnail_url} alt={file.original_filename} loading="lazy" /> : <span className="image-placeholder">IMG</span>}
               {expired && <span className="image-expired">原图已过期</span>}
               {index === 5 && messages.length > 6 && <span className="image-more">+{messages.length - 5}</span>}
             </button>
+            {selection && !expired && (
+              <label className="download-check" aria-label={`选择 ${file?.original_filename || '图片'}`}>
+                <input type="checkbox" checked={selection.selectedIDs.has(message.id)} onChange={() => selection.onToggle(message.id)} />
+                <span aria-hidden="true">✓</span>
+              </label>
+            )}
           </div>
         )
       })}
@@ -1100,7 +1348,10 @@ function Brand() {
       <span className="brand-mark" aria-hidden="true">
         <svg viewBox="0 0 24 24"><path d="M7.5 8.25 12 3.75l4.5 4.5M12 4.5v10.25M5.5 13.25v4.5A2.25 2.25 0 0 0 7.75 20h8.5a2.25 2.25 0 0 0 2.25-2.25v-4.5" /></svg>
       </span>
-      <span>传输助手</span>
+      <span className="brand-copy">
+        <strong>传输助手</strong>
+        <small className="brand-instance">{instanceHostLabel(window.location.host)}</small>
+      </span>
     </a>
   )
 }
@@ -1188,14 +1439,30 @@ function PairingCard({ session, secondsRemaining }: { session: PairingSession, s
   )
 }
 
-function RetryState({ title, message, onRetry }: { title: string, message: string, onRetry: () => void }) {
+function RetryState({
+  title,
+  message,
+  onRetry,
+  retryAfterSeconds = 0,
+  retryAllowed = true,
+}: {
+  title: string
+  message: string
+  onRetry: () => void
+  retryAfterSeconds?: number
+  retryAllowed?: boolean
+}) {
   return (
     <section className="state-panel state-panel--center">
       <span className="retry-mark" aria-hidden="true">↻</span>
       <p className="eyebrow">SECURE SESSION</p>
       <h1>{title}</h1>
       <p>{message}</p>
-      <button className="primary-button" type="button" onClick={onRetry}>生成新的配对码</button>
+      {retryAllowed && (
+        <button className="primary-button" type="button" disabled={retryAfterSeconds > 0} onClick={onRetry}>
+          {retryAfterSeconds > 0 ? `${retryAfterSeconds} 秒后可重试` : '生成新的配对码'}
+        </button>
+      )}
     </section>
   )
 }

@@ -5,6 +5,8 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import androidx.core.content.edit
+import org.json.JSONArray
+import org.json.JSONObject
 import java.nio.charset.StandardCharsets
 import java.security.KeyStore
 import java.security.SecureRandom
@@ -12,17 +14,28 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import java.util.UUID
 
 data class StoredSession(
     val serverAddress: String,
     val deviceId: String,
     val masterToken: String,
+    val profileId: String = "",
+    val profileName: String = "",
 )
 
 interface SessionStore {
     fun load(): StoredSession?
     fun prepare()
     fun save(session: ClaimedSession)
+    fun profiles(): List<ServerProfileSummary> = load()?.let {
+        listOf(ServerProfileSummary(it.profileId, it.profileName.ifBlank { defaultProfileName(it.serverAddress) }, it.serverAddress))
+    }.orEmpty()
+    fun activeProfileId(): String? = load()?.profileId
+    fun loadProfile(profileId: String): StoredSession? = load()?.takeIf { it.profileId == profileId }
+    fun switchProfile(profileId: String): Boolean = false
+    fun renameProfile(profileId: String, name: String): Boolean = false
+    fun deleteProfile(profileId: String): Boolean = false
 }
 
 class SecureSessionStore(context: Context) : SessionStore {
@@ -57,40 +70,152 @@ class SecureSessionStore(context: Context) : SessionStore {
 
     @Synchronized
     override fun load(): StoredSession? {
-        val serverAddress = preferences.getString(KEY_SERVER_ADDRESS, null) ?: return null
-        val deviceId = preferences.getString(KEY_DEVICE_ID, null) ?: return null
-        val encrypted = preferences.getString(KEY_MASTER_TOKEN, null) ?: return null
-        val iv = preferences.getString(KEY_MASTER_TOKEN_IV, null) ?: return null
-
-        return runCatching {
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(
-                Cipher.DECRYPT_MODE,
-                getOrCreateSecretKey(),
-                GCMParameterSpec(GCM_TAG_LENGTH_BITS, Base64.decode(iv, Base64.NO_WRAP)),
-            )
-            val plaintext = cipher.doFinal(Base64.decode(encrypted, Base64.NO_WRAP))
-            StoredSession(serverAddress, deviceId, String(plaintext, StandardCharsets.UTF_8))
-        }.getOrElse {
-            clearStoredValues()
-            null
+        val profiles = loadStoredProfiles()
+        if (profiles.isEmpty()) return null
+        val activeId = preferences.getString(KEY_ACTIVE_PROFILE_ID, null)
+        val profile = profiles.firstOrNull { it.id == activeId } ?: profiles.first()
+        if (activeId != profile.id) preferences.edit().putString(KEY_ACTIVE_PROFILE_ID, profile.id).apply()
+        return decrypt(profile).getOrElse {
+            if (deleteProfile(profile.id)) load() else null
         }
     }
 
     @Synchronized
     override fun save(session: ClaimedSession) {
+        val profiles = loadStoredProfiles().toMutableList()
+        val existing = profiles.firstOrNull {
+            it.serverAddress == session.serverAddress && it.deviceId == session.deviceId
+        }
+        val encrypted = encryptToken(session.masterToken)
+        val profile = StoredProfile(
+            id = existing?.id ?: UUID.randomUUID().toString(),
+            name = existing?.name ?: defaultProfileName(session.serverAddress),
+            serverAddress = session.serverAddress,
+            deviceId = session.deviceId,
+            encryptedToken = encrypted.first,
+            tokenIv = encrypted.second,
+        )
+        if (existing == null) profiles += profile else profiles[profiles.indexOf(existing)] = profile
+        check(writeProfiles(profiles, profile.id)) { "Unable to persist the Android master session." }
+        clearLegacyValues()
+    }
+
+    @Synchronized
+    override fun profiles(): List<ServerProfileSummary> = loadStoredProfiles().map {
+        ServerProfileSummary(it.id, it.name, it.serverAddress)
+    }
+
+    @Synchronized
+    override fun activeProfileId(): String? = preferences.getString(KEY_ACTIVE_PROFILE_ID, null)
+
+    @Synchronized
+    override fun loadProfile(profileId: String): StoredSession? =
+        loadStoredProfiles().firstOrNull { it.id == profileId }?.let { decrypt(it).getOrNull() }
+
+    @Synchronized
+    override fun switchProfile(profileId: String): Boolean {
+        if (loadStoredProfiles().none { it.id == profileId }) return false
+        return preferences.edit().putString(KEY_ACTIVE_PROFILE_ID, profileId).commit()
+    }
+
+    @Synchronized
+    override fun renameProfile(profileId: String, name: String): Boolean {
+        val normalizedName = name.trim().takeIf(String::isNotBlank) ?: return false
+        val profiles = loadStoredProfiles().toMutableList()
+        val index = profiles.indexOfFirst { it.id == profileId }
+        if (index < 0) return false
+        profiles[index] = profiles[index].copy(name = normalizedName)
+        return writeProfiles(profiles, activeProfileId())
+    }
+
+    @Synchronized
+    override fun deleteProfile(profileId: String): Boolean {
+        val stored = loadStoredProfiles()
+        if (stored.none { it.id == profileId }) return false
+        val summaries = stored.map { ServerProfileSummary(it.id, it.name, it.serverAddress) }
+        val removal = removeProfile(summaries, activeProfileId(), profileId)
+        val remaining = stored.filterNot { it.id == profileId }
+        return writeProfiles(remaining, removal.activeProfileId)
+    }
+
+    private fun encryptToken(token: String): Pair<String, String> {
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, getOrCreateSecretKey())
-        val encrypted = cipher.doFinal(session.masterToken.toByteArray(StandardCharsets.UTF_8))
-
-        val saved = preferences.edit()
-            .putString(KEY_SERVER_ADDRESS, session.serverAddress)
-            .putString(KEY_DEVICE_ID, session.deviceId)
-            .putString(KEY_MASTER_TOKEN, Base64.encodeToString(encrypted, Base64.NO_WRAP))
-            .putString(KEY_MASTER_TOKEN_IV, Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
-            .commit()
-        check(saved) { "Unable to persist the Android master session." }
+        val encrypted = cipher.doFinal(token.toByteArray(StandardCharsets.UTF_8))
+        return Base64.encodeToString(encrypted, Base64.NO_WRAP) to Base64.encodeToString(cipher.iv, Base64.NO_WRAP)
     }
+
+    private fun decrypt(profile: StoredProfile): Result<StoredSession> = runCatching {
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(
+            Cipher.DECRYPT_MODE,
+            getOrCreateSecretKey(),
+            GCMParameterSpec(GCM_TAG_LENGTH_BITS, Base64.decode(profile.tokenIv, Base64.NO_WRAP)),
+        )
+        val plaintext = cipher.doFinal(Base64.decode(profile.encryptedToken, Base64.NO_WRAP))
+        StoredSession(
+            profile.serverAddress,
+            profile.deviceId,
+            String(plaintext, StandardCharsets.UTF_8),
+            profile.id,
+            profile.name,
+        )
+    }
+
+    private fun loadStoredProfiles(): List<StoredProfile> {
+        preferences.getString(KEY_PROFILES_JSON, null)?.let { encoded ->
+            return runCatching {
+                val array = JSONArray(encoded)
+                buildList {
+                    repeat(array.length()) { index ->
+                        val value = array.getJSONObject(index)
+                        add(StoredProfile(
+                            value.getString("id"), value.getString("name"), value.getString("server_address"),
+                            value.getString("device_id"), value.getString("master_token_ciphertext"), value.getString("master_token_iv"),
+                        ))
+                    }
+                }
+            }.getOrElse { emptyList() }
+        }
+        return migrateLegacyProfile()
+    }
+
+    private fun migrateLegacyProfile(): List<StoredProfile> {
+        val serverAddress = preferences.getString(KEY_SERVER_ADDRESS, null) ?: return emptyList()
+        val deviceId = preferences.getString(KEY_DEVICE_ID, null) ?: return emptyList()
+        val encrypted = preferences.getString(KEY_MASTER_TOKEN, null) ?: return emptyList()
+        val iv = preferences.getString(KEY_MASTER_TOKEN_IV, null) ?: return emptyList()
+        val profile = StoredProfile(
+            UUID.randomUUID().toString(), defaultProfileName(serverAddress), serverAddress, deviceId, encrypted, iv,
+        )
+        if (writeProfiles(listOf(profile), profile.id)) clearLegacyValues()
+        return listOf(profile)
+    }
+
+    private fun writeProfiles(profiles: List<StoredProfile>, activeId: String?): Boolean {
+        val array = JSONArray()
+        profiles.forEach { profile ->
+            array.put(JSONObject()
+                .put("id", profile.id)
+                .put("name", profile.name)
+                .put("server_address", profile.serverAddress)
+                .put("device_id", profile.deviceId)
+                .put("master_token_ciphertext", profile.encryptedToken)
+                .put("master_token_iv", profile.tokenIv))
+        }
+        val editor = preferences.edit().putString(KEY_PROFILES_JSON, array.toString())
+        if (activeId == null) editor.remove(KEY_ACTIVE_PROFILE_ID) else editor.putString(KEY_ACTIVE_PROFILE_ID, activeId)
+        return editor.commit()
+    }
+
+    private data class StoredProfile(
+        val id: String,
+        val name: String,
+        val serverAddress: String,
+        val deviceId: String,
+        val encryptedToken: String,
+        val tokenIv: String,
+    )
 
     private fun getOrCreateSecretKey(): SecretKey {
         val keyStore = KeyStore.getInstance(KEYSTORE_PROVIDER).apply { load(null) }
@@ -111,7 +236,7 @@ class SecureSessionStore(context: Context) : SessionStore {
         return keyGenerator.generateKey()
     }
 
-    private fun clearStoredValues() {
+    private fun clearLegacyValues() {
         preferences.edit {
             remove(KEY_SERVER_ADDRESS)
             remove(KEY_DEVICE_ID)
@@ -133,5 +258,7 @@ class SecureSessionStore(context: Context) : SessionStore {
         const val KEY_MASTER_TOKEN = "master_token_ciphertext"
         const val KEY_MASTER_TOKEN_IV = "master_token_iv"
         const val KEY_STORAGE_PROBE = "storage_probe"
+        const val KEY_PROFILES_JSON = "server_profiles_v2"
+        const val KEY_ACTIVE_PROFILE_ID = "active_profile_id"
     }
 }

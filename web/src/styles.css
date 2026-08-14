@@ -44,6 +44,9 @@ a { color: inherit; text-decoration: none; }
 .brand { display: inline-flex; align-items: center; gap: 12px; font-size: 15px; font-weight: 760; }
 .brand-mark { width: 38px; height: 38px; display: grid; place-items: center; color: #fff; background: var(--accent); border-radius: 13px; }
 .brand-mark svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.brand-copy { display: grid; gap: 2px; min-width: 0; }
+.brand-copy strong { font-size: 15px; line-height: 1.15; }
+.brand-instance { color: var(--text-secondary); font-size: 10px; font-weight: 650; line-height: 1.15; letter-spacing: .02em; }
 
 .status-pill { display: inline-flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 13px; color: var(--text-secondary); background: var(--surface-muted); border-radius: 999px; font-size: 12px; font-weight: 700; }
 .status-pill--pairing { color: #8a5b0d; background: #fff1d7; }
@@ -86,6 +89,7 @@ h1 { margin: 0; font-size: clamp(42px, 6vw, 68px); line-height: 1.02; letter-spa
 .paired-meta span { padding: 9px 12px; color: var(--success); background: var(--success-soft); border-radius: 9px; font-size: 12px; font-weight: 700; }
 .primary-button { margin-top: 32px; min-height: 50px; padding: 0 22px; color: #fff; background: var(--accent); border: 0; border-radius: 13px; cursor: pointer; font-weight: 720; box-shadow: 0 10px 24px rgba(40, 89, 217, .22); }
 .primary-button:hover { background: #204fc8; }
+.primary-button:disabled { color: var(--text-secondary); background: var(--surface-muted); cursor: wait; box-shadow: none; }
 .primary-button:focus-visible { outline: 3px solid rgba(40, 89, 217, .28); outline-offset: 3px; }
 
 footer { min-height: 68px; display: flex; align-items: center; justify-content: space-between; gap: 20px; color: var(--text-secondary); border-top: 1px solid var(--border); font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
@@ -103,7 +107,7 @@ footer { min-height: 68px; display: flex; align-items: center; justify-content: 
 
 @media (max-width: 480px) {
   .topbar { min-height: 70px; }
-  .brand > span:last-child { display: none; }
+  .brand-instance { display: none; }
   .status-pill { padding: 0 10px; }
   .content { padding: 32px 0; }
   h1 { font-size: 42px; }
@@ -170,7 +174,24 @@ footer { min-height: 68px; display: flex; align-items: center; justify-content: 
 .timeline-heading > div:last-child { align-items: flex-start; flex-direction: column; gap: 2px; padding-left: 28px; border-left: 1px solid var(--border); }
 .timeline-heading h1 { font-size: 17px; line-height: 1.25; letter-spacing: -.02em; }
 .timeline-heading p { margin: 0; color: var(--text-secondary); font-size: 11px; font-weight: 650; }
-.timeline-actions { gap: 12px; }
+.timeline-actions { gap: 9px; flex-wrap: wrap; justify-content: flex-end; }
+
+.batch-action {
+  min-height: 38px;
+  padding: 0 12px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 750;
+}
+.batch-action:hover { border-color: var(--accent); color: var(--accent); }
+.batch-action:disabled { opacity: .48; cursor: not-allowed; }
+.batch-action--primary { color: #fff; background: var(--accent); border-color: var(--accent); }
+.batch-action--primary:hover { color: #fff; }
+.selection-count { color: var(--text-secondary); font-size: 11px; font-weight: 700; }
 
 .connection-badge {
   min-height: 34px;
@@ -273,6 +294,12 @@ footer { min-height: 68px; display: flex; align-items: center; justify-content: 
 .file-action { padding: 8px 10px; color: var(--accent); background: var(--accent-soft); border-radius: 10px; font-size: 10px; font-weight: 750; }
 .file-action--disabled { color: var(--text-secondary); background: var(--surface-muted); }
 
+.download-selected { outline: 3px solid color-mix(in srgb, var(--accent) 72%, transparent); outline-offset: 2px; }
+.download-check { position: absolute; z-index: 5; top: 9px; right: 9px; width: 26px; height: 26px; display: grid; place-items: center; cursor: pointer; }
+.download-check input { position: absolute; opacity: 0; pointer-events: none; }
+.download-check span { width: 24px; height: 24px; display: grid; place-items: center; color: transparent; background: rgba(255,255,255,.92); border: 2px solid rgba(42,52,68,.34); border-radius: 8px; box-shadow: 0 3px 10px rgba(0,0,0,.12); font-size: 13px; font-weight: 900; }
+.download-check input:checked + span { color: white; background: var(--accent); border-color: var(--accent); }
+
 .image-grid { overflow: hidden; display: grid; gap: 3px; background: var(--surface-muted); border: 1px solid var(--border); border-radius: 18px; }
 .image-grid--1 { grid-template-columns: 1fr; }
 .image-grid--2 { grid-template-columns: repeat(2, 1fr); }
@@ -369,6 +396,8 @@ footer { min-height: 68px; display: flex; align-items: center; justify-content: 
 .confirm-dialog > div { display: flex; justify-content: flex-end; gap: 8px; }
 .confirm-dialog button { min-height: 42px; padding: 0 16px; color: var(--text); background: var(--surface-muted); border: 0; border-radius: 12px; cursor: pointer; font-weight: 700; }
 .confirm-dialog .danger-button { color: #fff; background: var(--danger); }
+.confirm-dialog .primary-button { color: #fff; background: var(--accent); }
+.duplicate-files { margin-top: 8px; display: block; max-height: 88px; overflow: auto; color: var(--text); overflow-wrap: anywhere; }
 .attachment-sheet { width: min(100%, 500px); padding: 28px; color: var(--text); background: var(--surface); border-radius: 24px; box-shadow: var(--shadow); animation: dialog-in 220ms cubic-bezier(.2,.8,.2,1) both; }
 .attachment-options { margin-top: 26px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
 .attachment-options button { min-height: 150px; padding: 20px; display: flex; flex-direction: column; align-items: flex-start; gap: 7px; color: var(--text); text-align: left; background: var(--surface-muted); border: 1px solid transparent; border-radius: 18px; cursor: pointer; }
@@ -403,7 +432,7 @@ footer { min-height: 68px; display: flex; align-items: center; justify-content: 
   .timeline-topbar { min-height: 76px; }
   .timeline-heading { gap: 14px; }
   .timeline-heading > div:last-child { padding-left: 14px; }
-  .timeline-heading .brand > span:last-child { display: none; }
+  .timeline-heading .brand-instance { display: none; }
   .connection-badge { padding: 0 10px; }
   .timeline-list { padding: 22px 4px 28px; }
   .message-row { max-width: 88%; }

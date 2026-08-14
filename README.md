@@ -10,7 +10,9 @@
 
 - 在手机和电脑浏览器之间发送文字、图片与文件。
 - Android 端使用系统照片/文件选择器；Web 端可选择文件、拖放文件或直接粘贴任意剪贴板文件。
+- Web 重复粘贴会先确认；可从顶栏多选当前时间线中的图片和文件，批量保存到一个目录。
 - 查看上传进度、失败后重试、下载文件、全屏预览相邻批次的图片。
+- Android 可设置默认保存目录、查看保存位置、开启传输结果通知，并保存多个服务器档案进行切换。
 - 搜索文字消息和文件名；新消息会实时同步，离开底部阅读历史时可通过悬浮按钮一键返回最新消息。
 - 使用二维码或 6 位备用码配对浏览器。
 - 自托管：Go 服务、React 页面、SQLite、文件和缩略图都在一个 Docker 容器与一个持久化数据卷中。
@@ -178,6 +180,8 @@ curl http://127.0.0.1:5757/healthz
 健康检查返回 `{"status":"ok"}` 代表服务正常。
 
 > 若服务器拉取构建镜像很慢或失败，可在 `.env` 中将 `OFFICIAL_IMAGE_REGISTRY` 改为你的服务器可访问的 Docker Official Images 镜像地址，再重新执行构建。
+>
+> 若构建停在 `go mod download`，可在中国大陆服务器的 `.env` 中设置 `GOPROXY=https://goproxy.cn,direct`。该值只在镜像构建阶段生效，不会改变容器运行时的网络配置。
 
 ### 4. 在 1Panel 创建反向代理与 HTTPS
 
@@ -186,7 +190,17 @@ curl http://127.0.0.1:5757/healthz
 3. 填写域名，例如 `transdot.example.com`。
 4. 代理地址填写：`http://127.0.0.1:5757`。
 5. 开启 WebSocket 支持。
-6. 在“HTTPS”中申请 Let’s Encrypt 证书，并开启“强制 HTTPS”。
+6. 在“HTTPS”中申请 Let's Encrypt 证书，并开启“强制 HTTPS”。
+
+如果网站使用 `https://域名:非标准端口`，请在 1Panel 的反向代理高级配置中确保 Host 请求头保留端口：
+
+```nginx
+proxy_set_header Host $http_host;
+proxy_set_header Upgrade $http_upgrade;
+proxy_set_header Connection "upgrade";
+```
+
+不要使用 `proxy_set_header Host $host;`，它会丢失非标准端口，造成 WebSocket 的 Host 与 Origin 不一致。
 
 完成后访问：
 
@@ -321,7 +335,7 @@ cd android
 
 **公网打开域名后 WebSocket 或配对失败？**
 
-确认 1Panel 的反向代理目标是 `http://127.0.0.1:5757`，并且已开启 WebSocket 与 HTTPS。
+确认 1Panel 的反向代理目标是 `http://127.0.0.1:5757`，并且已开启 WebSocket 与 HTTPS。若公网地址包含非标准 HTTPS 端口，确认反向代理使用 `proxy_set_header Host $http_host;`，不要使用 `$host`。
 
 **服务重启后消息不见了？**
 
