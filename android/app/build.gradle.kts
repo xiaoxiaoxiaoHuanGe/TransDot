@@ -76,6 +76,7 @@ dependencies {
     implementation("androidx.compose.animation:animation")
     implementation("androidx.compose.material3:material3")
     implementation("com.google.zxing:core:3.5.4")
+    implementation("io.github.webrtc-sdk:android:144.7559.12")
     implementation("com.squareup.okhttp3:okhttp:5.4.0")
 
     testImplementation("junit:junit:4.13.2")
