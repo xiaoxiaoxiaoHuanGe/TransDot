@@ -1,10 +1,10 @@
 import { ChangeEvent, ClipboardEvent, DragEvent, FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
-import { instanceHostLabel, pairingTransportGuidance, parseRetryAfterSeconds } from './pairingPolicy'
+import { instanceHostLabel, pairingTransportGuidance, parseRetryAfterSeconds, unauthenticatedFlow } from './pairingPolicy'
 import { DownloadDirectory, downloadFilesToDirectory, fileFingerprint, partitionRepeatedFiles } from './transferTools'
 
 type PairingStatus = 'pending' | 'approved' | 'rejected' | 'expired' | 'consumed'
-type ScreenState = 'loading' | 'pairing' | 'paired' | 'rejected' | 'expired' | 'replaced' | 'insecure' | 'error'
+type ScreenState = 'loading' | 'bootstrap' | 'pairing' | 'paired' | 'rejected' | 'expired' | 'replaced' | 'insecure' | 'error'
 type ConnectionState = 'connecting' | 'connected' | 'offline'
 
 type PairingSession = {
@@ -13,6 +13,21 @@ type PairingSession = {
   qr_payload: string
   expires_at: string
   poll_interval_seconds: number
+}
+
+type BootstrapSession = {
+  session_id: string
+  qr_payload: string
+  instance_fingerprint: string
+  expires_at: string
+  poll_interval_seconds: number
+}
+
+type InstanceInfo = {
+  instance_id: string
+  instance_fingerprint: string
+  initialized: boolean
+  public_url: string
 }
 
 type AuthSession = {
@@ -217,13 +232,39 @@ function isPreviewableImage(file: File) {
 function App() {
   const [screen, setScreen] = useState<ScreenState>('loading')
   const [session, setSession] = useState<PairingSession | null>(null)
+  const [bootstrapSession, setBootstrapSession] = useState<BootstrapSession | null>(null)
   const [authSession, setAuthSession] = useState<AuthSession | null>(null)
   const [errorMessage, setErrorMessage] = useState('')
   const [retryAfterSeconds, setRetryAfterSeconds] = useState(0)
+  const [retryBootstrap, setRetryBootstrap] = useState(false)
   const [now, setNow] = useState(() => Date.now())
   const creatingSessionRef = useRef(false)
 
+  const createBootstrapSession = useCallback(async (signal?: AbortSignal) => {
+    setRetryBootstrap(true)
+    if (creatingSessionRef.current) return
+    const transportGuidance = pairingTransportGuidance(window.location)
+    if (transportGuidance) { setErrorMessage(transportGuidance); setScreen('insecure'); return }
+    creatingSessionRef.current = true
+    setScreen('loading')
+    setErrorMessage('')
+    try {
+      const created = await request<BootstrapSession>('/api/v1/bootstrap/sessions', { method: 'POST', signal })
+      setBootstrapSession(created)
+      setSession(null)
+      setNow(Date.now())
+      setScreen('bootstrap')
+    } catch (error) {
+      if (!isAbort(error)) {
+        if (error instanceof ApiError && error.code === 'ALREADY_INITIALIZED') setRetryBootstrap(false)
+        setRetryAfterSeconds(error instanceof ApiError && error.status === httpStatusTooManyRequests ? error.retryAfterSeconds ?? 120 : 0)
+        setErrorMessage(error instanceof Error ? error.message : '无法创建手机绑定会话。'); setScreen('error')
+      }
+    } finally { creatingSessionRef.current = false }
+  }, [])
+
   const createSession = useCallback(async (signal?: AbortSignal) => {
+    setRetryBootstrap(false)
     if (creatingSessionRef.current) return
     const transportGuidance = pairingTransportGuidance(window.location)
     if (transportGuidance) {
@@ -271,14 +312,35 @@ function App() {
     enterTimeline(controller.signal).catch((error: unknown) => {
       if (isAbort(error)) return
       if (error instanceof ApiError && error.status === 401) {
-        void createSession(controller.signal)
+        request<InstanceInfo>('/api/v1/instance/info', { signal: controller.signal })
+          .then((info) => unauthenticatedFlow(info.initialized) === 'bootstrap'
+            ? createBootstrapSession(controller.signal)
+            : createSession(controller.signal))
+          .catch((failure) => { if (!isAbort(failure)) { setErrorMessage(failure instanceof Error ? failure.message : '无法读取服务器状态。'); setScreen('error') } })
         return
       }
       setErrorMessage(error instanceof Error ? error.message : '无法检查浏览器状态。')
       setScreen('error')
     })
     return () => controller.abort()
-  }, [createSession, enterTimeline])
+  }, [createBootstrapSession, createSession, enterTimeline])
+
+  useEffect(() => {
+    if (screen !== 'bootstrap' || !bootstrapSession) return
+    const controller = new AbortController()
+    const poll = async () => {
+      try {
+        const result = await request<{ status: PairingStatus }>(`/api/v1/bootstrap/sessions/${encodeURIComponent(bootstrapSession.session_id)}/status`, { signal: controller.signal })
+        if (result.status === 'approved' || result.status === 'consumed') await enterTimeline(controller.signal)
+        else if (result.status === 'expired') setScreen('expired')
+      } catch (error) {
+        if (!isAbort(error)) { setErrorMessage(error instanceof Error ? error.message : '无法查询手机绑定状态。'); setScreen('error') }
+      }
+    }
+    const timer = window.setInterval(() => void poll(), Math.max(1, bootstrapSession.poll_interval_seconds) * 1000)
+    void poll()
+    return () => { controller.abort(); window.clearInterval(timer) }
+  }, [bootstrapSession, enterTimeline, screen])
 
   useEffect(() => {
     if (screen !== 'pairing' || !session) return
@@ -318,7 +380,7 @@ function App() {
   }, [enterTimeline, screen, session])
 
   useEffect(() => {
-    if (screen !== 'pairing') return
+    if (screen !== 'pairing' && screen !== 'bootstrap') return
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
   }, [screen])
@@ -332,12 +394,13 @@ function App() {
   }, [retryAfterSeconds > 0])
 
   const secondsRemaining = useMemo(() => {
-    if (!session) return 0
-    return Math.max(0, Math.ceil((new Date(session.expires_at).getTime() - now) / 1000))
-  }, [now, session])
+    const expiry = screen === 'bootstrap' ? bootstrapSession?.expires_at : session?.expires_at
+    if (!expiry) return 0
+    return Math.max(0, Math.ceil((new Date(expiry).getTime() - now) / 1000))
+  }, [bootstrapSession, now, screen, session])
 
   useEffect(() => {
-    if (screen === 'pairing' && secondsRemaining === 0) setScreen('expired')
+    if ((screen === 'pairing' || screen === 'bootstrap') && secondsRemaining === 0) setScreen('expired')
   }, [screen, secondsRemaining])
 
   const handleInvalidSession = useCallback(() => {
@@ -355,7 +418,8 @@ function App() {
         <Brand />
         <span className={`status-pill status-pill--${screen}`}>
           <span className="status-dot" aria-hidden="true" />
-          {screen === 'pairing' ? '等待手机确认'
+          {screen === 'bootstrap' ? '等待手机绑定'
+            : screen === 'pairing' ? '等待手机确认'
             : screen === 'replaced' ? '浏览器已被替换'
               : screen === 'insecure' ? '需要 HTTPS'
                 : '安全连接'}
@@ -366,6 +430,9 @@ function App() {
         {screen === 'loading' && <LoadingState />}
         {screen === 'pairing' && session && (
           <PairingCard session={session} secondsRemaining={secondsRemaining} />
+        )}
+        {screen === 'bootstrap' && bootstrapSession && (
+          <BootstrapCard session={bootstrapSession} secondsRemaining={secondsRemaining} />
         )}
         {(screen === 'expired' || screen === 'rejected' || screen === 'replaced' || screen === 'insecure' || screen === 'error') && (
           <RetryState
@@ -381,7 +448,7 @@ function App() {
                 : screen === 'replaced' ? 'Android Master 已授权另一台 Windows。重新配对会再次请求手机确认。'
                   : '生成新的二维码后，再用 Android Master 扫描确认。'
             }
-            onRetry={() => void createSession()}
+            onRetry={() => void (retryBootstrap ? createBootstrapSession() : createSession())}
             retryAfterSeconds={screen === 'error' ? retryAfterSeconds : 0}
             retryAllowed={screen !== 'insecure'}
           />
@@ -1429,6 +1496,28 @@ function PairingCard({ session, secondsRemaining }: { session: PairingSession, s
         <div className="manual-code">
           <span>无法扫码？输入 6 位码</span>
           <strong aria-label={`配对码 ${session.pairing_code.split('').join(' ')}`}>{formatPairingCode(session.pairing_code)}</strong>
+        </div>
+        <div className="expiry" aria-live="polite">
+          <span className="expiry-line"><span style={{ width: `${Math.min(100, secondsRemaining / 1.2)}%` }} /></span>
+          <span>{secondsRemaining} 秒后失效</span>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function BootstrapCard({ session, secondsRemaining }: { session: BootstrapSession, secondsRemaining: number }) {
+  return (
+    <section className="pairing-layout" aria-labelledby="bootstrap-title">
+      <div className="pairing-copy">
+        <p className="eyebrow">ANDROID BOOTSTRAP</p>
+        <h1 id="bootstrap-title">用手机绑定这台服务器</h1>
+        <p className="lead">打开传输助手，点击“扫码连接服务器”，扫描右侧二维码并确认服务器指纹。</p>
+        <div className="privacy-note">二维码只包含一次性绑定凭据，不包含初始化密钥或长期 Token。</div>
+      </div>
+      <div className="qr-card">
+        <div className="qr-frame" aria-label="Android 绑定二维码">
+          <QRCodeSVG value={session.qr_payload} size={232} level="M" marginSize={2} bgColor="#ffffff" fgColor="#14171c" />
         </div>
         <div className="expiry" aria-live="polite">
           <span className="expiry-line"><span style={{ width: `${Math.min(100, secondsRemaining / 1.2)}%` }} /></span>

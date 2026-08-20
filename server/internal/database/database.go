@@ -22,9 +22,13 @@ func Open(dataDir string) (*sql.DB, error) {
 	}
 
 	databasePath := filepath.Join(dataDir, "database", databaseFilename)
+	uriPath := filepath.ToSlash(databasePath)
+	if filepath.VolumeName(databasePath) != "" && uriPath[0] != '/' {
+		uriPath = "/" + uriPath
+	}
 	dsn := (&url.URL{
 		Scheme: "file",
-		Path:   filepath.ToSlash(databasePath),
+		Path:   uriPath,
 		RawQuery: url.Values{
 			"_pragma": []string{
 				"busy_timeout(5000)",

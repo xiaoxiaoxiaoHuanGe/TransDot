@@ -20,6 +20,10 @@ type pairingActionRequest struct {
 }
 
 func createPairingSession(service pairingService, limiter *attemptLimiter, logger *slog.Logger) http.HandlerFunc {
+	return createPairingSessionWithInstance(service, limiter, nil, "", logger)
+}
+
+func createPairingSessionWithInstance(service pairingService, limiter *attemptLimiter, instances instanceService, configuredURL string, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		allowed, retryAfter := limiter.AllowWithRetryAfter(remoteIP(r.RemoteAddr), time.Now())
 		if !allowed {
@@ -31,11 +35,29 @@ func createPairingSession(service pairingService, limiter *attemptLimiter, logge
 		session, err := service.Create(r.Context())
 		switch {
 		case err == nil:
-			qrPayload, marshalErr := json.Marshal(map[string]any{
+			payload := map[string]any{
 				"v":          1,
 				"session_id": session.ID,
 				"qr_secret":  session.QRSecret,
-			})
+			}
+			if instances != nil {
+				identity, identityErr := instances.Get(r.Context())
+				if identityErr != nil {
+					logger.Error("read instance for pairing QR", "error", identityErr)
+					writeError(w, 500, "INTERNAL_ERROR", "Internal server error.")
+					return
+				}
+				serverURL := configuredURL
+				if serverURL == "" {
+					scheme := "http"
+					if r.TLS != nil {
+						scheme = "https"
+					}
+					serverURL = scheme + "://" + r.Host
+				}
+				payload["v"], payload["kind"], payload["server_url"], payload["instance_id"], payload["expires_at"] = 2, "pairing", serverURL, identity.ID, session.ExpiresAt.UTC().Format(time.RFC3339Nano)
+			}
+			qrPayload, marshalErr := json.Marshal(payload)
 			if marshalErr != nil {
 				logger.Error("marshal pairing QR payload", "error", marshalErr)
 				writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error.")

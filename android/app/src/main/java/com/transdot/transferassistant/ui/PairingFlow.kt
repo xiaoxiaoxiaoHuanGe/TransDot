@@ -73,6 +73,8 @@ fun PairingFlow(
     onScannerError: (String) -> Unit,
     onConfirmReplacement: () -> Unit,
     onCancelReplacement: () -> Unit,
+    onConfirmBootstrap: () -> Unit = {},
+    onCancelBootstrap: () -> Unit = {},
 ) {
     when (state.screen) {
         PairingScreen.Home -> ReadyScreen(
@@ -110,6 +112,15 @@ fun PairingFlow(
             dismissButton = {
                 TextButton(onClick = onCancelReplacement) { Text("取消") }
             },
+        )
+    }
+    state.bootstrapPayload?.let { payload ->
+        AlertDialog(
+            onDismissRequest = onCancelBootstrap,
+            title = { Text("绑定新的服务器实例？") },
+            text = { Text("${payload.serverAddress}\n实例指纹 ${payload.instanceFingerprint.uppercase()}\n确认后会创建新的服务器档案。") },
+            confirmButton = { Button(onClick = onConfirmBootstrap, enabled = !state.isSubmitting) { Text("确认绑定") } },
+            dismissButton = { TextButton(onClick = onCancelBootstrap, enabled = !state.isSubmitting) { Text("取消") } },
         )
     }
 }

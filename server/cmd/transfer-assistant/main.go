@@ -10,11 +10,13 @@ import (
 	"syscall"
 	"time"
 
+	"transdot.local/transfer-assistant/server/internal/bootstrap"
 	"transdot.local/transfer-assistant/server/internal/config"
 	"transdot.local/transfer-assistant/server/internal/database"
 	"transdot.local/transfer-assistant/server/internal/deviceauth"
 	transferfiles "transdot.local/transfer-assistant/server/internal/files"
 	"transdot.local/transfer-assistant/server/internal/httpserver"
+	serverinstance "transdot.local/transfer-assistant/server/internal/instance"
 	"transdot.local/transfer-assistant/server/internal/messages"
 	"transdot.local/transfer-assistant/server/internal/pairing"
 	"transdot.local/transfer-assistant/server/internal/realtime"
@@ -38,6 +40,13 @@ func main() {
 	}
 	defer db.Close()
 	setupService := setup.NewService(db, cfg.OwnerSetupToken)
+	instanceService := serverinstance.NewService(db)
+	if _, err := instanceService.Get(context.Background()); err != nil {
+		logger.Error("server identity initialization failed", "error", err)
+		os.Exit(1)
+	}
+	identity, _ := instanceService.Get(context.Background())
+	bootstrapService := bootstrap.NewService(db, identity.ID, cfg.PairingTTL)
 	authService := deviceauth.NewService(db)
 	hub := realtime.NewHub()
 	pairingService := pairing.NewService(db, cfg.PairingTTL, hub.RevokeDevices)
@@ -61,7 +70,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddress(),
-		Handler:           httpserver.NewWithFiles(db, setupService, authService, pairingService, messageService, fileService, hub, webHandler, logger),
+		Handler:           httpserver.NewComplete(db, setupService, authService, pairingService, bootstrapService, messageService, fileService, instanceService, cfg.PublicURL, hub, webHandler, logger),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}

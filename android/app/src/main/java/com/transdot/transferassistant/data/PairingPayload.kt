@@ -10,11 +10,18 @@ internal object PairingPayload {
         val json = runCatching { JSONObject(rawValue.trim()) }.getOrElse {
             throw IllegalArgumentException("这不是传输助手配对二维码。")
         }
-        require(json.optInt("v", -1) == 1) { "二维码版本不受支持。" }
+        val version = json.optInt("v", -1)
+        require(version == 1 || version == 2) { "二维码版本不受支持。" }
+        if (version == 2) require(json.optString("kind") == "pairing") { "二维码类型不正确。" }
         val sessionId = json.optString("session_id")
         val secret = json.optString("qr_secret")
         require(sessionPattern.matches(sessionId)) { "二维码缺少有效会话。" }
         require(secretPattern.matches(secret)) { "二维码缺少安全凭据。" }
-        return PairingCredential.QR(sessionId, secret)
+        return PairingCredential.QR(
+            sessionId,
+            secret,
+            if (version == 2) json.optString("server_url") else "",
+            if (version == 2) json.optString("instance_id") else "",
+        )
     }
 }

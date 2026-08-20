@@ -18,6 +18,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -30,6 +32,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.heading
@@ -50,7 +58,11 @@ fun SetupScreen(
     onServerAddressChange: (String) -> Unit,
     onSetupTokenChange: (String) -> Unit,
     onClaim: () -> Unit,
+    onBootstrapQRCode: (String) -> Unit = {},
+    onConfirmBootstrap: () -> Unit = {},
+    onCancelBootstrap: () -> Unit = {},
 ) {
+    var scanning by remember { mutableStateOf(false) }
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets.safeDrawing,
@@ -83,15 +95,27 @@ fun SetupScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                SetupForm(
+                if (scanning) {
+                    SetupScanner(onQRCode = { scanning = false; onBootstrapQRCode(it) }, onBack = { scanning = false })
+                } else SetupForm(
                     state = state,
                     allowCleartext = allowCleartext,
                     onServerAddressChange = onServerAddressChange,
                     onSetupTokenChange = onSetupTokenChange,
                     onClaim = onClaim,
+                    onScan = { scanning = true },
                 )
             }
         }
+    }
+    state.bootstrapPayload?.let { payload ->
+        AlertDialog(
+            onDismissRequest = onCancelBootstrap,
+            title = { Text("绑定这台服务器？") },
+            text = { Text("${payload.serverAddress}\n实例指纹 ${payload.instanceFingerprint.uppercase()}") },
+            confirmButton = { Button(onClick = onConfirmBootstrap, enabled = !state.isSubmitting) { Text("确认绑定") } },
+            dismissButton = { TextButton(onClick = onCancelBootstrap, enabled = !state.isSubmitting) { Text("取消") } },
+        )
     }
 }
 
@@ -102,6 +126,7 @@ private fun SetupForm(
     onServerAddressChange: (String) -> Unit,
     onSetupTokenChange: (String) -> Unit,
     onClaim: () -> Unit,
+    onScan: () -> Unit,
 ) {
     var showToken by remember { mutableStateOf(false) }
 
@@ -189,6 +214,25 @@ private fun SetupForm(
                     Text(if (state.needsSecureStorageRetry) "重试安全保存" else "连接并初始化")
                 }
             }
+            OutlinedButton(onClick = onScan, modifier = Modifier.fillMaxWidth(), enabled = !state.isSubmitting) {
+                Text("扫码连接服务器")
+            }
         }
+    }
+}
+
+@Composable
+private fun SetupScanner(onQRCode: (String) -> Unit, onBack: () -> Unit) {
+    val context = LocalContext.current
+    var granted by remember { mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted = it }
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(AppSpacing.large)) {
+        Text("扫描网页绑定二维码", style = MaterialTheme.typography.headlineSmall)
+        if (granted) {
+            QRCodeScanner(onQRCode = onQRCode, onCameraError = {}, modifier = Modifier.fillMaxWidth().height(360.dp))
+        } else {
+            Button(onClick = { launcher.launch(Manifest.permission.CAMERA) }, modifier = Modifier.fillMaxWidth()) { Text("允许相机权限") }
+        }
+        TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("返回手动输入") }
     }
 }

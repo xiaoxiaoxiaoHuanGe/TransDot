@@ -16,3 +16,7 @@ export function parseRetryAfterSeconds(value: string | null, fallback = 120) {
 export function instanceHostLabel(host: string) {
   return host.trim() || '当前服务器'
 }
+
+export function unauthenticatedFlow(initialized: boolean) {
+  return initialized ? 'pairing' as const : 'bootstrap' as const
+}

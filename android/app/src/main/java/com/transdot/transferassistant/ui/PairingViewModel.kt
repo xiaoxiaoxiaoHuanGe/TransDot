@@ -4,6 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.transdot.transferassistant.data.PairingCredential
+import com.transdot.transferassistant.data.BootstrapPayload
+import com.transdot.transferassistant.data.BootstrapRepository
+import com.transdot.transferassistant.data.ClaimedSession
 import com.transdot.transferassistant.data.PairingFailure
 import com.transdot.transferassistant.data.PairingPayload
 import com.transdot.transferassistant.data.PairingRepository
@@ -30,14 +33,19 @@ data class PairingUiState(
     val isSubmitting: Boolean = false,
     val replacementRequired: Boolean = false,
     val errorMessage: String? = null,
+    val bootstrapPayload: BootstrapPayload? = null,
 )
 
 class PairingViewModel(
     private val repository: PairingRepository,
-    sessionStore: SessionStore,
+    private val sessionStore: SessionStore,
+    private val bootstrapRepository: BootstrapRepository? = null,
+    private val allowCleartext: Boolean = false,
+    private val onBootstrapSaved: () -> Unit = {},
 ) : ViewModel() {
     private val storedSession: StoredSession? = sessionStore.load()
     private var pendingCredential: PairingCredential? = null
+    private var pendingBootstrapSession: ClaimedSession? = null
     private val mutableUiState = MutableStateFlow(
         PairingUiState(
             serverAddress = storedSession?.serverAddress.orEmpty(),
@@ -88,6 +96,12 @@ class PairingViewModel(
 
     fun onQRCodeScanned(rawValue: String) {
         if (mutableUiState.value.isSubmitting || pendingCredential != null) return
+        if (bootstrapRepository != null) {
+            runCatching { BootstrapPayload.parse(rawValue, allowCleartext) }.getOrNull()?.let { payload ->
+                mutableUiState.update { it.copy(bootstrapPayload = payload, errorMessage = null) }
+                return
+            }
+        }
         val credential = runCatching { PairingPayload.parse(rawValue) }.getOrElse { error ->
             mutableUiState.update {
                 it.copy(errorMessage = error.message ?: "这不是有效的传输助手二维码。")
@@ -95,6 +109,23 @@ class PairingViewModel(
             return
         }
         submit(credential, replaceExisting = false)
+    }
+
+    fun cancelBootstrap() { pendingBootstrapSession = null; mutableUiState.update { it.copy(bootstrapPayload = null) } }
+
+    fun confirmBootstrap() {
+        val payload = mutableUiState.value.bootstrapPayload ?: return
+        val bootstrap = bootstrapRepository ?: return
+        mutableUiState.update { it.copy(isSubmitting = true, errorMessage = null) }
+        viewModelScope.launch {
+            runCatching {
+                val claimed = pendingBootstrapSession ?: run { sessionStore.prepare(); bootstrap.claim(payload).also { pendingBootstrapSession = it } }
+                sessionStore.save(claimed); pendingBootstrapSession = null; claimed
+            }.onSuccess {
+                mutableUiState.update { state -> state.copy(isSubmitting = false, bootstrapPayload = null, screen = PairingScreen.Success) }
+                onBootstrapSaved()
+            }.onFailure { error -> mutableUiState.update { it.copy(isSubmitting = false, errorMessage = error.message ?: "扫码绑定失败。") } }
+        }
     }
 
     fun reportScannerError(message: String) {
@@ -139,6 +170,9 @@ class PairingViewModel(
         viewModelScope.launch {
             runCatching { repository.approve(session, credential, replaceExisting) }
                 .onSuccess {
+                    if (credential is PairingCredential.QR && session.instanceId.isBlank() && credential.instanceId.isNotBlank()) {
+                        session.profileId.takeIf(String::isNotBlank)?.let { sessionStore.updateInstance(it, credential.instanceId) }
+                    }
                     pendingCredential = null
                     mutableUiState.update {
                         it.copy(
@@ -172,11 +206,14 @@ class PairingViewModel(
     class Factory(
         private val repository: PairingRepository,
         private val sessionStore: SessionStore,
+        private val bootstrapRepository: BootstrapRepository? = null,
+        private val allowCleartext: Boolean = false,
+        private val onBootstrapSaved: () -> Unit = {},
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             require(modelClass.isAssignableFrom(PairingViewModel::class.java))
-            return PairingViewModel(repository, sessionStore) as T
+            return PairingViewModel(repository, sessionStore, bootstrapRepository, allowCleartext, onBootstrapSaved) as T
         }
     }
 

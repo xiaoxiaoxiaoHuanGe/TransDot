@@ -50,6 +50,13 @@ func TestLoadRequiresStrongOwnerSetupToken(t *testing.T) {
 	}
 }
 
+func TestLoadAllowsBootstrapWithoutOwnerSetupToken(t *testing.T) {
+	t.Setenv("OWNER_SETUP_TOKEN", "")
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+}
+
 func TestLoadRejectsInvalidPort(t *testing.T) {
 	t.Setenv("PORT", "70000")
 	t.Setenv("OWNER_SETUP_TOKEN", "0123456789abcdef0123456789abcdef")
@@ -65,5 +72,22 @@ func TestLoadRejectsInvalidPairingTTL(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want invalid pairing TTL error")
+	}
+}
+
+func TestLoadValidatesPublicURL(t *testing.T) {
+	t.Setenv("OWNER_SETUP_TOKEN", "0123456789abcdef0123456789abcdef")
+	t.Setenv("PUBLIC_URL", "https://transfer.example.com:8443")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PublicURL != "https://transfer.example.com:8443" {
+		t.Fatalf("PublicURL = %q", cfg.PublicURL)
+	}
+
+	t.Setenv("PUBLIC_URL", "https://transfer.example.com/path")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() accepted PUBLIC_URL with a path")
 	}
 }

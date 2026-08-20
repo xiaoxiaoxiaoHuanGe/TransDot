@@ -10,7 +10,12 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 sealed interface PairingCredential {
-    data class QR(val sessionId: String, val secret: String) : PairingCredential
+    data class QR(
+        val sessionId: String,
+        val secret: String,
+        val serverAddress: String = "",
+        val instanceId: String = "",
+    ) : PairingCredential
     data class Code(val value: String) : PairingCredential
 }
 
@@ -37,6 +42,14 @@ class NetworkPairingRepository(
         credential: PairingCredential,
         replaceExisting: Boolean,
     ) = withContext(Dispatchers.IO) {
+        if (credential is PairingCredential.QR && credential.serverAddress.isNotBlank()) {
+            require(ServerAddress.normalize(credential.serverAddress, allowCleartext) == ServerAddress.normalize(session.serverAddress, allowCleartext)) {
+                "该二维码属于另一台服务器。"
+            }
+            require(session.instanceId.isBlank() || credential.instanceId == session.instanceId) {
+                "服务器已重置，请重新扫码连接服务器。"
+            }
+        }
         val body = credentialBody(credential)
             .put("replace_existing", replaceExisting)
             .toString()

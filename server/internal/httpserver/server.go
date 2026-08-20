@@ -68,6 +68,22 @@ func NewWithFiles(
 	return newHandler(db, setupService, authService, pairingService, messageService, fileService, hub, webHandler, logger)
 }
 
+func NewWithFeatures(
+	db databasePinger, setupService setupService, authService deviceAuthenticator,
+	pairingService pairingService, messageService messageService, fileService fileService,
+	instances instanceService, publicURL string, hub *realtime.Hub, webHandler http.Handler, logger *slog.Logger,
+) http.Handler {
+	return newHandlerWithInstance(db, setupService, authService, pairingService, messageService, fileService, instances, publicURL, hub, webHandler, logger)
+}
+
+func NewComplete(
+	db databasePinger, setupService setupService, authService deviceAuthenticator,
+	pairingService pairingService, bootstrapService bootstrapService, messageService messageService, fileService fileService,
+	instances instanceService, publicURL string, hub *realtime.Hub, webHandler http.Handler, logger *slog.Logger,
+) http.Handler {
+	return newHandlerComplete(db, setupService, authService, pairingService, bootstrapService, messageService, fileService, instances, publicURL, hub, webHandler, logger)
+}
+
 func newHandler(
 	db databasePinger,
 	setupService setupService,
@@ -79,15 +95,45 @@ func newHandler(
 	webHandler http.Handler,
 	logger *slog.Logger,
 ) http.Handler {
+	return newHandlerWithInstance(db, setupService, authService, pairingService, messageService, fileService, nil, "", hub, webHandler, logger)
+}
+
+func newHandlerWithInstance(
+	db databasePinger, setupService setupService, authService deviceAuthenticator,
+	pairingService pairingService, messageService messageService, fileService fileService,
+	instances instanceService, publicURL string, hub *realtime.Hub, webHandler http.Handler, logger *slog.Logger,
+) http.Handler {
+	return newHandlerComplete(db, setupService, authService, pairingService, nil, messageService, fileService, instances, publicURL, hub, webHandler, logger)
+}
+
+func newHandlerComplete(
+	db databasePinger, setupService setupService, authService deviceAuthenticator,
+	pairingService pairingService, bootstrapService bootstrapService, messageService messageService, fileService fileService,
+	instances instanceService, publicURL string, hub *realtime.Hub, webHandler http.Handler, logger *slog.Logger,
+) http.Handler {
 	mux := http.NewServeMux()
 	setupLimiter := newAttemptLimiter(5, 5*time.Minute)
 	pairingCreateLimiter := newAttemptLimiter(10, 2*time.Minute)
 	pairingActionLimiter := newAttemptLimiter(15, 2*time.Minute)
+	bootstrapCreateLimiter := newAttemptLimiter(10, 2*time.Minute)
+	bootstrapClaimLimiter := newAttemptLimiter(5, 5*time.Minute)
 	mux.HandleFunc("GET /healthz", healthz(db))
 	mux.HandleFunc("GET /api/v1/setup/status", setupStatus(setupService, logger))
+	if instances != nil {
+		mux.HandleFunc("GET /api/v1/instance/info", instanceInfo(instances, setupService, publicURL, logger))
+	}
+	if bootstrapService != nil && instances != nil {
+		mux.HandleFunc("POST /api/v1/bootstrap/sessions", limitBootstrap(bootstrapCreateLimiter, createBootstrapSession(bootstrapService, instances, publicURL, logger)))
+		mux.HandleFunc("POST /api/v1/bootstrap/claim", limitBootstrap(bootstrapClaimLimiter, claimBootstrap(bootstrapService, logger)))
+		mux.HandleFunc("GET /api/v1/bootstrap/sessions/{id}/status", bootstrapStatus(bootstrapService, logger))
+	}
 	mux.HandleFunc("POST /api/v1/setup/claim", setupClaim(setupService, setupLimiter, logger))
 	mux.HandleFunc("GET /api/v1/auth/session", browserSession(authService, logger))
-	mux.HandleFunc("POST /api/v1/pairing/sessions", createPairingSession(pairingService, pairingCreateLimiter, logger))
+	if instances != nil {
+		mux.HandleFunc("POST /api/v1/pairing/sessions", createPairingSessionWithInstance(pairingService, pairingCreateLimiter, instances, publicURL, logger))
+	} else {
+		mux.HandleFunc("POST /api/v1/pairing/sessions", createPairingSession(pairingService, pairingCreateLimiter, logger))
+	}
 	mux.HandleFunc("GET /api/v1/pairing/sessions/{id}/status", pairingStatus(pairingService, logger))
 	mux.HandleFunc("POST /api/v1/pairing/approve", approvePairing(authService, pairingService, pairingActionLimiter, logger))
 	mux.HandleFunc("POST /api/v1/pairing/reject", rejectPairing(authService, pairingService, pairingActionLimiter, logger))

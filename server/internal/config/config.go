@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -28,6 +29,7 @@ type Config struct {
 	Port             int
 	DataDir          string
 	OwnerSetupToken  string
+	PublicURL        string
 	PairingTTL       time.Duration
 	MaxFileBytes     int64
 	MaxBatchBytes    int64
@@ -61,8 +63,15 @@ func Load() (Config, error) {
 	}
 
 	cfg.OwnerSetupToken = strings.TrimSpace(os.Getenv("OWNER_SETUP_TOKEN"))
-	if len(cfg.OwnerSetupToken) < minSetupTokenLength {
+	if cfg.OwnerSetupToken != "" && len(cfg.OwnerSetupToken) < minSetupTokenLength {
 		return Config{}, fmt.Errorf("OWNER_SETUP_TOKEN must contain at least %d characters", minSetupTokenLength)
+	}
+	if value := strings.TrimSpace(os.Getenv("PUBLIC_URL")); value != "" {
+		parsed, err := url.Parse(value)
+		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.Path != "" && parsed.Path != "/" || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return Config{}, fmt.Errorf("PUBLIC_URL must be an HTTPS origin without a path, query, or fragment")
+		}
+		cfg.PublicURL = strings.TrimRight(value, "/")
 	}
 
 	pairingTTLSeconds, err := positiveIntFromEnv("PAIRING_TTL_SECONDS", defaultPairingTTL)

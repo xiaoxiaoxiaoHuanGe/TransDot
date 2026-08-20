@@ -23,7 +23,7 @@ cd android
 
 Master Token 使用 Android Keystore AES-256-GCM 加密后保存在应用私有存储，应用备份已禁用。
 
-首次启动时填写电脑的局域网地址（例如 `http://192.168.1.10:5757`）及部署环境中的 `OWNER_SETUP_TOKEN`。成功 Claim 后服务器只保存 Master Token 的 SHA-256，应用不再显示初始化密钥。
+首次启动优先点击“扫码连接服务器”，扫描未初始化 Web 页面显示的 Bootstrap 二维码，核对地址和实例指纹后确认。APP 会自动保存服务器地址和 Master Token；手动地址与 `OWNER_SETUP_TOKEN` 仍作为应急入口。
 
 ## Windows 配对
 

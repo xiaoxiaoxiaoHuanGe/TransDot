@@ -13,6 +13,8 @@ data class ClaimedSession(
     val serverAddress: String,
     val deviceId: String,
     val masterToken: String,
+    val instanceId: String = "",
+    val instanceFingerprint: String = "",
 )
 
 sealed class SetupFailure(message: String, cause: Throwable? = null) : Exception(message, cause) {

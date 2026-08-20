@@ -6,6 +6,7 @@ data class ServerProfileSummary(
     val id: String,
     val name: String,
     val serverAddress: String,
+    val instanceId: String = "",
 )
 
 data class ProfileRemovalResult(

@@ -1,4 +1,4 @@
-name: transfer-assistant
+name: transdot
 
 services:
   transfer-assistant:
@@ -11,10 +11,11 @@ services:
     image: transfer-assistant:local
     restart: unless-stopped
     ports:
-      - "${PORT:-5757}:5757"
+      - "${HOST_BIND:-0.0.0.0}:${HOST_PORT:-5757}:5757"
     environment:
       PORT: "5757"
       DATA_DIR: /app/data
+      PUBLIC_URL: "${PUBLIC_URL:-}"
       OWNER_SETUP_TOKEN: "${OWNER_SETUP_TOKEN:-}"
       MAX_FILE_BYTES: "${MAX_FILE_BYTES:-314572800}"
       MAX_BATCH_BYTES: "${MAX_BATCH_BYTES:-524288000}"

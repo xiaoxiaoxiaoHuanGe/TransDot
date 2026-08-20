@@ -30,7 +30,7 @@
 ## 重要概念与安全提醒
 
 - `.env` 是你的私密部署配置，**绝不能上传到 GitHub**或发给别人。
-- `OWNER_SETUP_TOKEN` 是首次把 Android 设为 Master 所需的初始化密码。请生成至少 32 个随机字符并妥善保存。
+- `OWNER_SETUP_TOKEN` 是可选的手动恢复密钥；扫码初始化不需要它。配置时至少使用 32 个随机字符。
 - Master Claim 只能成功一次。V1 没有账号找回功能；如果卸载 Android 应用且丢失了 Master Token，可能无法恢复控制权。
 - 公网部署必须使用 HTTPS 域名。不要把 `5757` 端口直接暴露给公网。
 - 备份数据时要备份 Docker 卷 `transfer-assistant-data`；只备份 Git 仓库不会保留消息、配对关系和已上传文件。
@@ -73,18 +73,18 @@ Copy-Item .env.example .env
 notepad .env
 ```
 
-在打开的 `.env` 中，至少将这一行改成你生成的随机密码：
+扫码初始化时不需要修改 `OWNER_SETUP_TOKEN`。需要保留手动恢复入口时，可设置随机密钥：
 
 ```env
 OWNER_SETUP_TOKEN=替换成至少32位随机字符
 ```
 
-本地使用时保留 `PORT=5757` 即可。首次部署不必修改其他项目。
+本地使用时保留 `HOST_PORT=5757` 即可。首次部署不必修改其他项目。
 
 ### 3. 构建并启动
 
 ```powershell
-docker compose up --build -d
+docker compose -p transdot up --build -d
 docker compose ps
 Invoke-RestMethod http://localhost:5757/healthz
 ```
@@ -148,10 +148,12 @@ nano .env
 
 ```env
 # 只允许服务器本机访问容器端口，公网访问交给 1Panel 反向代理
-PORT=127.0.0.1:5757
+HOST_BIND=127.0.0.1
+HOST_PORT=5757
+PUBLIC_URL=https://transdot.example.com
 
-# 使用你生成的高强度随机值
-OWNER_SETUP_TOKEN=替换成至少32位随机字符
+# 可选：手动恢复时使用，至少32位
+OWNER_SETUP_TOKEN=
 ```
 
 其余限制项可以先保留默认值：单文件 300 MB、单批 500 MB/20 项、文件池 1 GB、原文件 24 小时。
@@ -172,7 +174,7 @@ OWNER_SETUP_TOKEN=替换成至少32位随机字符
 
 ```bash
 cd /opt/transdot
-docker compose up --build -d
+docker compose -p transdot up --build -d
 docker compose ps
 curl http://127.0.0.1:5757/healthz
 ```
@@ -224,12 +226,14 @@ https://transdot.example.com
 
 ## 第一次怎么使用
 
-### 1. 把 Android 设为 Master
+### 1. 扫码绑定 Android Master
 
-1. 在 Android 手机上安装 APK，打开应用。
-2. 填写服务地址：本地部署使用电脑局域网地址；公网部署使用 HTTPS 域名。
-3. 填写 `.env` 中的 `OWNER_SETUP_TOKEN`。
-4. 完成首次 Claim。
+1. 在浏览器打开部署后的 HTTPS 地址，未初始化页面会显示绑定二维码。
+2. 在 Android 手机上安装 APK，点击“扫码连接服务器”。
+3. 扫描网页二维码，核对域名和实例指纹后确认。
+4. APP 自动保存服务器地址和 Master Token，当前浏览器也会自动完成绑定。
+
+二维码使用两分钟有效、只能消费一次的 Bootstrap 凭据，不包含 `OWNER_SETUP_TOKEN`。手动输入地址和初始化密钥的方式继续保留为应急入口。
 
 成功后，Android 就是此服务的唯一 Master。Token 会由应用安全保存，服务器不会明文保存它。
 
@@ -286,8 +290,7 @@ docker compose logs -f
 
 ```bash
 cd /opt/transdot
-git pull
-docker compose up --build -d
+sh docker/update.sh
 ```
 
 停止服务（保留数据）：
@@ -297,6 +300,15 @@ docker compose down
 ```
 
 > 不要使用 `docker compose down -v`，它会删除包含 SQLite、消息和上传文件的 Docker 数据卷。
+
+需要明确丢弃全部数据、配对关系和服务器身份时，执行：
+
+```bash
+cd /opt/transdot
+sh docker/reset.sh RESET
+```
+
+Reset 后打开 Web 页面并重新扫码绑定。普通更新与 Reset 完全分开。
 
 需要迁移或备份时，请备份 Docker 卷 `transfer-assistant-data`。先停止服务，再由熟悉 Docker 卷备份的人员进行归档；恢复时必须恢复整个数据卷，而不仅是 Git 仓库。
 

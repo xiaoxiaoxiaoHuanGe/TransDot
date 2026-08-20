@@ -1,6 +1,8 @@
 package com.transdot.transferassistant.ui
 
 import com.transdot.transferassistant.data.ClaimedSession
+import com.transdot.transferassistant.data.BootstrapPayload
+import com.transdot.transferassistant.data.BootstrapRepository
 import com.transdot.transferassistant.data.SessionStore
 import com.transdot.transferassistant.data.SetupRepository
 import com.transdot.transferassistant.data.StoredSession
@@ -61,6 +63,46 @@ class SetupViewModelTest {
         assertFalse(viewModel.uiState.value.needsSecureStorageRetry)
         assertTrue(viewModel.uiState.value.isReady)
         assertEquals("device-1", viewModel.uiState.value.deviceId)
+    }
+
+    @Test
+    fun confirmsBootstrapBeforeClaimAndSavesSession() = runTest(dispatcher.scheduler) {
+        val claimed = ClaimedSession("https://transfer.example.com", "device-2", "token-2", "instance-2", "7f3a-91c2")
+        val sessionStore = FakeSessionStore(failSave = false)
+        val bootstrap = object : BootstrapRepository {
+            var calls = 0
+            override suspend fun claim(payload: BootstrapPayload): ClaimedSession { calls++; return claimed }
+        }
+        val viewModel = SetupViewModel(FakeSetupRepository(claimed), sessionStore, bootstrap)
+
+        viewModel.onBootstrapScanned("""{"v":2,"kind":"bootstrap","server_url":"https://transfer.example.com","instance_id":"instance-2","instance_fingerprint":"7f3a-91c2","bootstrap_session_id":"123e4567-e89b-12d3-a456-426614174000","bootstrap_secret":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","expires_at":"2099-08-20T12:00:00Z"}""")
+        assertFalse(viewModel.uiState.value.isReady)
+        assertEquals("7f3a-91c2", viewModel.uiState.value.bootstrapPayload?.instanceFingerprint)
+
+        viewModel.confirmBootstrap()
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(1, bootstrap.calls)
+        assertEquals(1, sessionStore.saveCalls)
+        assertTrue(viewModel.uiState.value.isReady)
+    }
+
+    @Test
+    fun retriesBootstrapSecureSaveWithoutClaimingAgain() = runTest(dispatcher.scheduler) {
+        val claimed = ClaimedSession("https://transfer.example.com", "device-2", "token-2", "instance-2", "7f3a-91c2")
+        val store = FakeSessionStore(failSave = true)
+        val bootstrap = object : BootstrapRepository {
+            var calls = 0
+            override suspend fun claim(payload: BootstrapPayload): ClaimedSession { calls++; return claimed }
+        }
+        val viewModel = SetupViewModel(FakeSetupRepository(claimed), store, bootstrap)
+        viewModel.onBootstrapScanned("""{"v":2,"kind":"bootstrap","server_url":"https://transfer.example.com","instance_id":"instance-2","instance_fingerprint":"7f3a-91c2","bootstrap_session_id":"123e4567-e89b-12d3-a456-426614174000","bootstrap_secret":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","expires_at":"2099-08-20T12:00:00Z"}""")
+        viewModel.confirmBootstrap(); dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(1, bootstrap.calls)
+        assertTrue(viewModel.uiState.value.needsSecureStorageRetry)
+        store.failSave = false
+        viewModel.confirmBootstrap(); dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(1, bootstrap.calls)
+        assertTrue(viewModel.uiState.value.isReady)
     }
 
     private class FakeSetupRepository(

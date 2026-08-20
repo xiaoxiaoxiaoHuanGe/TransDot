@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { instanceHostLabel, pairingTransportGuidance, parseRetryAfterSeconds } from './pairingPolicy'
+import { instanceHostLabel, pairingTransportGuidance, parseRetryAfterSeconds, unauthenticatedFlow } from './pairingPolicy'
 
 describe('pairingTransportGuidance', () => {
   it.each([
@@ -32,5 +32,12 @@ describe('instanceHostLabel', () => {
   it('keeps the current host and supplies a fallback', () => {
     expect(instanceHostLabel('localhost:5758')).toBe('localhost:5758')
     expect(instanceHostLabel('  ')).toBe('当前服务器')
+  })
+})
+
+describe('unauthenticatedFlow', () => {
+  it('uses bootstrap only for an uninitialized instance', () => {
+    expect(unauthenticatedFlow(false)).toBe('bootstrap')
+    expect(unauthenticatedFlow(true)).toBe('pairing')
   })
 })

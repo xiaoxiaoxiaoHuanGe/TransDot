@@ -30,6 +30,7 @@ import com.transdot.transferassistant.data.AppPreferences
 import com.transdot.transferassistant.data.AppSettings
 import com.transdot.transferassistant.data.DownloadDestinationManager
 import com.transdot.transferassistant.data.NetworkPairingRepository
+import com.transdot.transferassistant.data.NetworkBootstrapRepository
 import com.transdot.transferassistant.data.NetworkTimelineRepository
 import com.transdot.transferassistant.data.SecureSessionStore
 import com.transdot.transferassistant.data.SessionStore
@@ -54,6 +55,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val repository = remember { NetworkSetupRepository(allowCleartext = BuildConfig.DEBUG) }
             val sessionStore = remember { SecureSessionStore(applicationContext) }
+            val bootstrapRepository = remember { NetworkBootstrapRepository(allowCleartext = BuildConfig.DEBUG) }
             val validationRepository = remember { NetworkTimelineRepository(allowCleartext = BuildConfig.DEBUG, context = applicationContext) }
             val appPreferences = remember { AppPreferences(applicationContext) }
             val downloadDestinationManager = remember { DownloadDestinationManager(applicationContext, appPreferences) }
@@ -74,7 +76,7 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background,
                 ) {
                     key(sessionGeneration) {
-                        val factory = remember(sessionGeneration) { SetupViewModel.Factory(repository, sessionStore) }
+                        val factory = remember(sessionGeneration) { SetupViewModel.Factory(repository, sessionStore, bootstrapRepository, BuildConfig.DEBUG) }
                         val setupViewModel: SetupViewModel = viewModel(key = "setup-$sessionGeneration", factory = factory)
                         val uiState by setupViewModel.uiState.collectAsStateWithLifecycle()
                         AnimatedContent(
@@ -134,6 +136,7 @@ class MainActivity : ComponentActivity() {
                                         if (deleted) sessionGeneration += 1
                                         deleted
                                     },
+                                    onSessionChanged = { sessionGeneration += 1 },
                                 )
                             } else {
                                 SetupScreen(
@@ -142,6 +145,9 @@ class MainActivity : ComponentActivity() {
                                     onServerAddressChange = setupViewModel::updateServerAddress,
                                     onSetupTokenChange = setupViewModel::updateSetupToken,
                                     onClaim = setupViewModel::claimServer,
+                                    onBootstrapQRCode = setupViewModel::onBootstrapScanned,
+                                    onConfirmBootstrap = setupViewModel::confirmBootstrap,
+                                    onCancelBootstrap = setupViewModel::cancelBootstrap,
                                 )
                             }
                         }
@@ -224,11 +230,13 @@ private fun PairingContent(
     onSwitchServer: suspend (String) -> Result<Unit>,
     onRenameServer: (String, String) -> Boolean,
     onDeleteServer: (String) -> Boolean,
+    onSessionChanged: () -> Unit,
 ) {
     val pairingRepository = remember { NetworkPairingRepository(allowCleartext = BuildConfig.DEBUG) }
+    val bootstrapRepository = remember { NetworkBootstrapRepository(allowCleartext = BuildConfig.DEBUG) }
     val context = androidx.compose.ui.platform.LocalContext.current
     val timelineRepository = remember { NetworkTimelineRepository(allowCleartext = BuildConfig.DEBUG, context = context.applicationContext) }
-    val pairingFactory = remember { PairingViewModel.Factory(pairingRepository, sessionStore) }
+    val pairingFactory = remember { PairingViewModel.Factory(pairingRepository, sessionStore, bootstrapRepository, BuildConfig.DEBUG, onSessionChanged) }
     val timelineFactory = remember { TimelineViewModel.Factory(timelineRepository, sessionStore, notifier) }
     val profileId = sessionStore.activeProfileId().orEmpty()
     val pairingViewModel: PairingViewModel = viewModel(key = "pairing-$profileId", factory = pairingFactory)
@@ -296,6 +304,8 @@ private fun PairingContent(
             onScannerError = pairingViewModel::reportScannerError,
             onConfirmReplacement = pairingViewModel::confirmReplacement,
             onCancelReplacement = pairingViewModel::cancelReplacement,
+            onConfirmBootstrap = pairingViewModel::confirmBootstrap,
+            onCancelBootstrap = pairingViewModel::cancelBootstrap,
         )
     }
 }
