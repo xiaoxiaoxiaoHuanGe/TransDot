@@ -421,6 +421,120 @@ footer { min-height: 68px; display: flex; align-items: center; justify-content: 
 .viewer-nav--right { right: 22px; }
 .viewer footer { min-height: 54px; justify-content: center; color: #b9bec6; border-color: rgba(255,255,255,.12); text-transform: none; letter-spacing: 0; }
 
+/* Authenticated LAN transfer workspace */
+.lan-shell {
+  width: min(100% - 40px, 1040px);
+  height: 100vh;
+  min-height: 600px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.lan-topbar { flex: 0 0 auto; }
+.lan-back {
+  min-height: 40px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 750;
+}
+.lan-back:hover { color: var(--accent); border-color: var(--accent); }
+.lan-back:focus-visible,
+.lan-file-command:focus-within,
+.lan-section button:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 28%, transparent); outline-offset: 2px; }
+.lan-back svg,
+.lan-mode-command svg,
+.lan-file-command svg,
+.lan-direction svg,
+.lan-empty svg,
+.lan-section .icon-button svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.lan-mode-command { display: inline-flex; align-items: center; gap: 7px; }
+.lan-mode-command svg { width: 17px; height: 17px; }
+.connection-badge--transferring,
+.connection-badge--connected { color: var(--success); background: var(--success-soft); }
+.connection-badge--connecting > span { animation: pulse 1.3s ease-in-out infinite; }
+.connection-badge--failed { color: var(--danger); background: #fbeaec; }
+
+.lan-main { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 8px max(16px, 4vw) 48px; }
+.lan-section { width: min(100%, 820px); margin: 0 auto; padding: 28px 0; border-bottom: 1px solid var(--border); }
+.lan-section-heading { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.lan-section-heading > div { min-width: 0; }
+.lan-section .eyebrow { margin-bottom: 7px; }
+.lan-section h2 { margin: 0; font-size: 17px; line-height: 1.35; overflow-wrap: anywhere; }
+.lan-supporting { margin: 10px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
+.lan-selection-error { margin: 10px 0 0; color: var(--danger); font-size: 11px; line-height: 1.5; }
+.lan-section .batch-action--primary { min-height: 42px; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.lan-section .batch-action--primary svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+.lan-file-command {
+  min-height: 42px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #fff;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 760;
+  white-space: nowrap;
+}
+.lan-file-command input { position: fixed; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.lan-file-command--disabled { color: var(--text-secondary); background: var(--surface-muted); border-color: var(--border); cursor: not-allowed; }
+
+.lan-queue { border-bottom: 0; }
+.lan-queue-summary { min-height: 32px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.lan-queue-summary h2 { font-size: 15px; }
+.lan-queue-summary span { color: var(--text-secondary); font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.lan-empty { min-height: 180px; display: grid; place-items: center; align-content: center; gap: 12px; color: var(--text-secondary); text-align: center; }
+.lan-empty svg { width: 34px; height: 34px; color: var(--accent); }
+.lan-empty p { margin: 0; font-size: 12px; }
+.lan-transfer-list { margin-top: 14px; border-top: 1px solid var(--border); }
+.lan-transfer-row {
+  min-height: 92px;
+  padding: 14px 4px;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) 82px 40px;
+  align-items: center;
+  gap: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.lan-direction { width: 36px; height: 36px; display: grid; place-items: center; color: var(--accent); background: var(--accent-soft); border-radius: 10px; }
+.lan-file-detail { min-width: 0; display: grid; gap: 7px; }
+.lan-file-detail strong { min-width: 0; font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; word-break: break-word; }
+.lan-file-detail small { min-height: 15px; color: var(--text-secondary); font-size: 10px; line-height: 1.5; }
+.lan-transfer-row--failed .lan-file-detail small,
+.lan-transfer-row--cancelled .lan-file-detail small { color: var(--danger); }
+.lan-progress { height: 5px; overflow: hidden; background: var(--surface-muted); border-radius: 5px; }
+.lan-progress span { display: block; height: 100%; background: var(--accent); border-radius: inherit; transition: width 160ms linear; }
+.lan-transfer-row--completed .lan-progress span { background: var(--success); }
+.lan-transfer-metrics { display: grid; justify-items: end; gap: 5px; font-variant-numeric: tabular-nums; }
+.lan-transfer-metrics strong { font-size: 12px; }
+.lan-transfer-metrics span { color: var(--text-secondary); font-size: 10px; white-space: nowrap; }
+.lan-row-action-space { width: 40px; height: 40px; }
+.lan-current-summary { min-height: 54px; padding-top: 14px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 14px; color: var(--text-secondary); font-size: 11px; }
+.lan-current-summary > span:first-child { min-width: 0; color: var(--text); font-weight: 700; overflow-wrap: anywhere; }
+.lan-current-summary > span:nth-child(2) { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
 @keyframes message-in { from { opacity: 0; transform: translateY(8px) scale(.99); } }
 @keyframes backdrop-in { from { opacity: 0; } }
 @keyframes sheet-in { from { opacity: .5; transform: translateX(24px); } }
@@ -429,6 +543,7 @@ footer { min-height: 68px; display: flex; align-items: center; justify-content: 
 
 @media (max-width: 700px) {
   .timeline-shell { width: min(100% - 24px, 640px); }
+  .lan-shell { width: min(100% - 24px, 640px); }
   .timeline-topbar { min-height: 76px; }
   .timeline-heading { gap: 14px; }
   .timeline-heading > div:last-child { padding-left: 14px; }
@@ -439,6 +554,13 @@ footer { min-height: 68px; display: flex; align-items: center; justify-content: 
   .message-row--images { width: 92%; max-width: 92%; }
   .composer-region { padding-bottom: 10px; }
   .composer { border-radius: 19px; }
+  .lan-topbar { min-height: 76px; }
+  .lan-main { padding: 4px 4px 28px; }
+  .lan-section { padding: 22px 0; }
+  .lan-section-heading { align-items: flex-start; }
+  .lan-transfer-row { grid-template-columns: 34px minmax(0, 1fr) 66px 40px; gap: 9px; }
+  .lan-current-summary { grid-template-columns: minmax(0, 1fr) auto; }
+  .lan-current-summary > span:nth-child(2) { grid-column: 1 / -1; grid-row: 2; }
 }
 
 @media (max-width: 460px) {
@@ -460,6 +582,15 @@ footer { min-height: 68px; display: flex; align-items: center; justify-content: 
   .viewer-nav--right { right: 8px; }
   .viewer-stage { padding: 12px 8px; }
   .viewer-stage img { max-width: calc(100vw - 16px); max-height: calc(100dvh - 142px); }
+  .lan-back span { display: none; }
+  .lan-back { width: 40px; padding: 0; justify-content: center; }
+  .lan-topbar .connection-badge { max-width: 134px; padding: 6px 9px; font-size: 9px; line-height: 1.35; text-align: left; }
+  .lan-section-heading { flex-direction: column; gap: 14px; }
+  .lan-section-heading .batch-action,
+  .lan-file-command { width: 100%; justify-content: center; }
+  .lan-transfer-row { grid-template-columns: 32px minmax(0, 1fr) 54px 40px; gap: 7px; }
+  .lan-direction { width: 32px; height: 32px; }
+  .lan-transfer-metrics span { font-size: 9px; }
 }
 
 @media (prefers-color-scheme: dark) {
@@ -467,4 +598,8 @@ footer { min-height: 68px; display: flex; align-items: center; justify-content: 
   .message-row--own .message-bubble { color: #111827; }
   .send-button, .search-form button { color: #111827; }
   .inline-error, .status-pill--replaced { background: #3c2228; }
+  .connection-badge--failed { background: #3c2228; }
+  .lan-section .batch-action--primary,
+  .lan-file-command:not(.lan-file-command--disabled) { color: #111827; }
+  .lan-file-command--disabled { color: var(--text-secondary); }
 }

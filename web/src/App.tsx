@@ -1,5 +1,6 @@
 import { ChangeEvent, ClipboardEvent, DragEvent, FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
+import { LanTransferView } from './lan/LanTransferView'
 import { instanceHostLabel, pairingTransportGuidance, parseRetryAfterSeconds, unauthenticatedFlow } from './pairingPolicy'
 import { DownloadDirectory, downloadFilesToDirectory, fileFingerprint, partitionRepeatedFiles } from './transferTools'
 
@@ -464,6 +465,7 @@ function App() {
 }
 
 function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSession, onSessionInvalid: () => void }) {
+  const [lanOpen, setLanOpen] = useState(false)
   const [messages, setMessages] = useState<TimelineMessage[]>([])
   const [nextBefore, setNextBefore] = useState('')
   const [draft, setDraft] = useState('')
@@ -997,6 +999,8 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
 
   const groupedMessages = useMemo(() => groupTimelineMessages(messages), [messages])
 
+  if (lanOpen) return <LanTransferView onBack={() => setLanOpen(false)} />
+
   return (
     <div
       className="timeline-shell"
@@ -1015,6 +1019,9 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
           </div>
         </div>
         <div className="timeline-actions">
+          <button className="batch-action lan-mode-command" type="button" onClick={() => setLanOpen(true)}>
+            <LanTransferIcon /><span>局域网快传</span>
+          </button>
           <span className={`connection-badge connection-badge--${connection}`}>
             <span />{connection === 'connected' ? '实时连接' : connection === 'connecting' ? '正在连接' : '等待重连'}
           </span>
@@ -1425,6 +1432,10 @@ function Brand() {
 
 function SearchIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3" /><path d="m15.5 15.5 4.2 4.2" /></svg>
+}
+
+function LanTransferIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h14m-4-4 4 4-4 4M20 16H6m4-4-4 4 4 4" /></svg>
 }
 
 function CopyIcon() {
