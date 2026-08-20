@@ -121,20 +121,39 @@ class LanPeerEngineTest {
         assertEquals(LanChannelMessage.Control("{\"type\":\"queue_complete\"}"), messages[0])
         assertTrue((messages[1] as LanChannelMessage.Binary).bytes.contentEquals(byteArrayOf(4, 5)))
     }
+
+    @Test
+    fun reconnectAfterFailureCreatesAFreshPeerAndReannouncesReady() = runTest {
+        val signals = FakeLanSignals()
+        val factory = FakeLanPeerFactory()
+        val engine = LanPeerEngine(signals, factory, backgroundScope)
+        engine.start()
+        engine.onFailed("LAN_PEER_OFFLINE")
+
+        assertTrue(engine.reconnect())
+
+        assertEquals(2, factory.createCount)
+        assertTrue(signals.restarted)
+        assertEquals(LanPeerState.Waiting, engine.state.value)
+    }
 }
 
 private class FakeLanSignals : LanSignalSource {
     override val events = MutableSharedFlow<LanSignalEvent>(extraBufferCapacity = 16)
     var answer: String? = null; var connected = false; var fallbackCalled = false
+    var restarted = false
     override fun sendAnswer(sdp: String): Boolean { answer = sdp; return true }
     override fun sendIce(candidate: String): Boolean = true
     override fun markConnected(): Boolean { connected = true; return true }
+    override fun restartSession(): Boolean { restarted = true; return true }
     suspend fun emit(event: LanSignalEvent) { events.emit(event) }
 }
 
 private class FakeLanPeerFactory : LanPeerFactory {
     val iceServers = mutableListOf<String>(); val peer = FakePeer()
+    var createCount = 0
     override fun create(iceServers: List<String>, observer: LanPeerObserver): LanPeerConnection {
+        createCount += 1
         this.iceServers += iceServers; peer.observer = observer; return peer
     }
 }

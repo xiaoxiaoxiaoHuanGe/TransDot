@@ -20,11 +20,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import com.transdot.transferassistant.data.NetworkSetupRepository
 import com.transdot.transferassistant.data.AppPreferences
 import com.transdot.transferassistant.data.AppSettings
@@ -35,6 +38,16 @@ import com.transdot.transferassistant.data.NetworkTimelineRepository
 import com.transdot.transferassistant.data.SecureSessionStore
 import com.transdot.transferassistant.data.SessionStore
 import com.transdot.transferassistant.data.SystemTransferNotifier
+import com.transdot.transferassistant.lan.AndroidLanContentAccess
+import com.transdot.transferassistant.lan.AndroidLanForegroundController
+import com.transdot.transferassistant.lan.AndroidLanPeerFactory
+import com.transdot.transferassistant.lan.LanFileStore
+import com.transdot.transferassistant.lan.LanPeerEngine
+import com.transdot.transferassistant.lan.LanSignalingClient
+import com.transdot.transferassistant.lan.OkHttpLanWebSocketTransport
+import com.transdot.transferassistant.ui.LanTransferScreen
+import com.transdot.transferassistant.ui.LanTransferViewModel
+import com.transdot.transferassistant.ui.StoredLanTransferFiles
 import com.transdot.transferassistant.ui.PairingFlow
 import com.transdot.transferassistant.ui.PairingViewModel
 import com.transdot.transferassistant.ui.SetupScreen
@@ -43,6 +56,11 @@ import com.transdot.transferassistant.ui.TimelineScreen
 import com.transdot.transferassistant.ui.TimelineViewModel
 import com.transdot.transferassistant.ui.theme.TransferAssistantTheme
 import com.transdot.transferassistant.ui.theme.ThemeMode
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import okhttp3.OkHttpClient
 
 class MainActivity : ComponentActivity() {
     private var incomingShare by mutableStateOf<IncomingShare?>(null)
@@ -238,6 +256,7 @@ private fun PairingContent(
     val timelineRepository = remember { NetworkTimelineRepository(allowCleartext = BuildConfig.DEBUG, context = context.applicationContext) }
     val pairingFactory = remember { PairingViewModel.Factory(pairingRepository, sessionStore, bootstrapRepository, BuildConfig.DEBUG, onSessionChanged) }
     val timelineFactory = remember { TimelineViewModel.Factory(timelineRepository, sessionStore, notifier) }
+    val lanHttpClient = remember { OkHttpClient() }
     val profileId = sessionStore.activeProfileId().orEmpty()
     val pairingViewModel: PairingViewModel = viewModel(key = "pairing-$profileId", factory = pairingFactory)
     val timelineViewModel: TimelineViewModel = viewModel(key = "timeline-$profileId", factory = timelineFactory)
@@ -245,6 +264,8 @@ private fun PairingContent(
     val timelineUiState by timelineViewModel.uiState.collectAsStateWithLifecycle()
     val serverProfiles = sessionStore.profiles()
     val activeServerName = serverProfiles.firstOrNull { it.id == profileId }?.name ?: "当前服务器"
+    var lanOpen by rememberSaveable(profileId) { mutableStateOf(false) }
+    var lanGeneration by rememberSaveable(profileId) { mutableStateOf(0) }
 
     LifecycleStartEffect(timelineViewModel) {
         timelineViewModel.start()
@@ -252,7 +273,36 @@ private fun PairingContent(
     }
 
     if (pairingUiState.screen == com.transdot.transferassistant.ui.PairingScreen.Home) {
-        TimelineScreen(
+        if (lanOpen) {
+            val lanFactory = remember(profileId, lanGeneration) {
+                object : ViewModelProvider.Factory {
+                    @Suppress("UNCHECKED_CAST")
+                    override fun <T : ViewModel> create(modelClass: Class<T>): T = createLanResources(
+                        context = context.applicationContext,
+                        session = requireNotNull(sessionStore.load()) { "当前服务器会话不存在。" },
+                        preferences = AppPreferences(context.applicationContext),
+                        httpClient = lanHttpClient,
+                    ) as T
+                }
+            }
+            val resources: LanResources = viewModel(key = "lan-$profileId-$lanGeneration", factory = lanFactory)
+            val lanState by resources.model.uiState.collectAsStateWithLifecycle()
+            LanTransferScreen(
+                state = lanState,
+                receiveFolderLabel = downloadDestinationManager.folderLabel(),
+                onFilesSelected = { resources.model.enqueue(it.map(Uri::toString)) },
+                onReceiveFolderSelected = onDefaultSaveTreeChanged,
+                onRetry = resources.model::retry,
+                onCancel = resources.model::cancelActive,
+                onReconnect = resources.model::reconnect,
+                onClearError = resources.model::clearError,
+                onBack = {
+                    resources.close()
+                    lanGeneration += 1
+                    lanOpen = false
+                },
+            )
+        } else TimelineScreen(
             state = timelineUiState,
             ownDeviceId = pairingUiState.deviceId,
             themeMode = themeMode,
@@ -291,6 +341,7 @@ private fun PairingContent(
             onClearHighlight = timelineViewModel::clearHighlight,
             onClearError = timelineViewModel::clearError,
             onPairWindows = pairingViewModel::openScanner,
+            onOpenLanTransfer = { lanOpen = true },
         )
     } else {
         PairingFlow(
@@ -308,4 +359,36 @@ private fun PairingContent(
             onCancelBootstrap = pairingViewModel::cancelBootstrap,
         )
     }
+}
+
+private class LanResources(
+    val model: LanTransferViewModel,
+    private val signaling: LanSignalingClient,
+    private val scope: CoroutineScope,
+) : ViewModel(), AutoCloseable {
+    private var closed = false
+    override fun close() {
+        if (closed) return
+        closed = true
+        model.close()
+        signaling.close()
+        scope.cancel()
+    }
+
+    override fun onCleared() = close()
+}
+
+private fun createLanResources(
+    context: android.content.Context,
+    session: com.transdot.transferassistant.data.StoredSession,
+    preferences: AppPreferences,
+    httpClient: OkHttpClient,
+): LanResources {
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    val signaling = LanSignalingClient(session, OkHttpLanWebSocketTransport(httpClient), scope)
+    val peer = LanPeerEngine(signaling, AndroidLanPeerFactory(context), scope)
+    val files = StoredLanTransferFiles(LanFileStore(AndroidLanContentAccess(context.contentResolver, preferences)))
+    val model = LanTransferViewModel(peer, files, AndroidLanForegroundController(context))
+    signaling.start()
+    return LanResources(model, signaling, scope)
 }

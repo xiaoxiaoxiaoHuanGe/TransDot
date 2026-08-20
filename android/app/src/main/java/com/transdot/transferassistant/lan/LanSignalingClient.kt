@@ -70,6 +70,12 @@ class LanSignalingClient(
     override fun sendAnswer(sdp: String): Boolean = sendSession("lan.answer", JSONObject().put("sdp", sdp))
     override fun sendIce(candidate: String): Boolean = isHostCandidate(candidate) && sendSession("lan.ice", JSONObject().put("candidate", candidate))
     override fun markConnected(): Boolean = sendSession("lan.connected", JSONObject())
+    override fun restartSession(): Boolean {
+        if (closed || socket == null) return false
+        if (sessionId != null && !sendSession("lan.leave", JSONObject())) return false
+        sessionId = null
+        return send("lan.ready", null, JSONObject())
+    }
 
     fun close() {
         if (closed) return

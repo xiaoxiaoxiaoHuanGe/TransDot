@@ -44,6 +44,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -219,6 +220,7 @@ fun TimelineScreen(
     onClearHighlight: () -> Unit,
     onClearError: () -> Unit,
     onPairWindows: () -> Unit,
+    onOpenLanTransfer: () -> Unit,
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -341,6 +343,7 @@ fun TimelineScreen(
                 onRequestDelete = onRequestDelete,
                 onOpenSearch = onOpenSearch,
                 onPairWindows = onPairWindows,
+                onOpenLanTransfer = onOpenLanTransfer,
                 onOpenAttachment = { attachmentSheet = true },
                 onOpenSettings = { settingsSheet = true },
                 onOpenImages = { images, index -> viewer = ViewerState(images, index) },
@@ -505,6 +508,7 @@ private fun TimelineHome(
     onRequestDelete: (List<TimelineMessage>) -> Unit,
     onOpenSearch: () -> Unit,
     onPairWindows: () -> Unit,
+    onOpenLanTransfer: () -> Unit,
     onOpenAttachment: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenImages: (List<TimelineMessage>, Int) -> Unit,
@@ -617,7 +621,7 @@ private fun TimelineHome(
     }
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
-        topBar = { TimelineTopBar(activeServerName, state.connectionState, onPairWindows, onOpenSearch, onOpenSettings) },
+        topBar = { TimelineTopBar(activeServerName, state.connectionState, onPairWindows, onOpenLanTransfer, onOpenSearch, onOpenSettings) },
         bottomBar = { MessageComposer(state.draft, state.isSending, state.errorMessage, onDraftChange, onSend, onOpenAttachment) },
     ) { innerPadding ->
         Box(Modifier.fillMaxSize().padding(innerPadding)) {
@@ -734,6 +738,7 @@ internal fun TimelineTopBar(
     activeServerName: String,
     connection: TimelineConnectionState,
     onPairWindows: () -> Unit,
+    onOpenLanTransfer: () -> Unit,
     onSearch: () -> Unit,
     onSettings: () -> Unit,
 ) {
@@ -746,7 +751,20 @@ internal fun TimelineTopBar(
         ),
     )
     AppTopBar(title = "传输助手", subtitle = statusLine) {
-        TextButton(onClick = onPairWindows) { Text("配对") }
+        TextButton(onClick = onOpenLanTransfer, modifier = Modifier.sizeIn(minHeight = 48.dp)) {
+            Icon(
+                painter = painterResource(R.drawable.ic_send),
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.width(AppSpacing.tiny))
+            Text("快传")
+        }
+        AppIconButton(
+            iconRes = R.drawable.ic_qr_code,
+            contentDescription = "配对 Windows",
+            onClick = onPairWindows,
+        )
         AppIconButton(
             iconRes = R.drawable.ic_search,
             contentDescription = "搜索消息",

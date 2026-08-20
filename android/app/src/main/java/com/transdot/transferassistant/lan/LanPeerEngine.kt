@@ -19,6 +19,7 @@ interface LanSignalSource {
     fun sendAnswer(sdp: String): Boolean
     fun sendIce(candidate: String): Boolean
     fun markConnected(): Boolean
+    fun restartSession(): Boolean
 }
 
 sealed interface LanPeerState {
@@ -79,14 +80,26 @@ interface LanPeerFactory {
     fun create(iceServers: List<String>, observer: LanPeerObserver): LanPeerConnection
 }
 
+interface LanTransferPeer {
+    val state: StateFlow<LanPeerState>
+    val messages: Flow<LanChannelMessage>
+    fun start()
+    fun beginFile(fileId: String): Boolean
+    fun finishFile(fileId: String)
+    fun sendControl(frame: LanControlFrame): Boolean
+    suspend fun sendBinary(bytes: ByteArray): Boolean
+    fun reconnect(): Boolean
+    fun close()
+}
+
 class LanPeerEngine(
     private val signals: LanSignalSource,
     private val peerFactory: LanPeerFactory,
     private val scope: CoroutineScope,
     private val timeoutMillis: Long = 8_000,
-) : LanPeerObserver, LanDataChannelObserver {
+) : LanTransferPeer, LanPeerObserver, LanDataChannelObserver {
     private val mutableState = MutableStateFlow<LanPeerState>(LanPeerState.Idle)
-    val state: StateFlow<LanPeerState> = mutableState.asStateFlow()
+    override val state: StateFlow<LanPeerState> = mutableState.asStateFlow()
     private val closed = AtomicBoolean(false)
     private var peer: LanPeerConnection? = null
     private var channel: LanDataChannel? = null
@@ -95,9 +108,9 @@ class LanPeerEngine(
     private val bufferedChanges = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     private var activeFileId: String? = null
     private val incomingMessages = Channel<LanChannelMessage>(Channel.UNLIMITED)
-    val messages: Flow<LanChannelMessage> = incomingMessages.receiveAsFlow()
+    override val messages: Flow<LanChannelMessage> = incomingMessages.receiveAsFlow()
 
-    fun start() {
+    override fun start() {
         if (closed.get() || signalJob != null) return
         peer = peerFactory.create(emptyList(), this)
         mutableState.value = LanPeerState.Waiting
@@ -169,19 +182,19 @@ class LanPeerEngine(
     }
 
     @Synchronized
-    fun beginFile(fileId: String): Boolean {
+    override fun beginFile(fileId: String): Boolean {
         if (fileId.isBlank() || mutableState.value != LanPeerState.Connected || activeFileId != null) return false
         activeFileId = fileId
         return true
     }
 
     @Synchronized
-    fun finishFile(fileId: String) {
+    override fun finishFile(fileId: String) {
         if (activeFileId != fileId) throw LanProtocolException("LAN_PROTOCOL_ERROR")
         activeFileId = null
     }
 
-    suspend fun sendBinary(bytes: ByteArray): Boolean {
+    override suspend fun sendBinary(bytes: ByteArray): Boolean {
         val current = channel ?: return false
         if (!current.isOpen || bytes.size > LAN_CHUNK_BYTES) return false
         if (current.bufferedAmount > LAN_BUFFER_HIGH_BYTES) {
@@ -190,8 +203,18 @@ class LanPeerEngine(
         return current === channel && current.isOpen && current.sendBinary(bytes)
     }
 
-    fun sendControl(frame: LanControlFrame): Boolean =
+    override fun sendControl(frame: LanControlFrame): Boolean =
         channel?.takeIf { it.isOpen }?.sendText(LanProtocol.encode(frame)) == true
+
+    @Synchronized
+    override fun reconnect(): Boolean {
+        if (closed.get() || mutableState.value !is LanPeerState.Failed) return false
+        peer = peerFactory.create(emptyList(), this)
+        mutableState.value = LanPeerState.Waiting
+        if (signals.restartSession()) return true
+        fail("LAN_SIGNAL_SEND_FAILED")
+        return false
+    }
 
     override fun onClosed() {
         if (!closed.get()) fail("LAN_DATA_CHANNEL_CLOSED")
@@ -199,7 +222,7 @@ class LanPeerEngine(
 
     override fun onFailed(code: String) = fail(code)
 
-    fun close() {
+    override fun close() {
         if (!closed.compareAndSet(false, true)) return
         timeoutJob?.cancel()
         signalJob?.cancel()
