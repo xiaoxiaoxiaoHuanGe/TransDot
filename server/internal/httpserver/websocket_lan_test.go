@@ -2,12 +2,16 @@ package httpserver
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,7 +25,8 @@ import (
 )
 
 func TestWebsocketRelaysAuthenticatedLANSignals(t *testing.T) {
-	db, err := database.Open(t.TempDir())
+	dataDir := t.TempDir()
+	db, err := database.Open(dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +63,23 @@ func TestWebsocketRelaysAuthenticatedLANSignals(t *testing.T) {
 		Type: lantransfer.SignalOffer, SessionID: androidSession,
 		Data: json.RawMessage(`{"sdp":"offer"}`),
 	})
-	readLANEvent(t, ctx, android, lantransfer.SignalOffer)
+	offerEvent := readLANEvent(t, ctx, android, lantransfer.SignalOffer)
+
+	writeLANSignal(t, ctx, android, lantransfer.ClientSignal{
+		Type: lantransfer.SignalAnswer, SessionID: androidSession,
+		Data: json.RawMessage(`{"sdp":"answer"}`),
+	})
+	answerEvent := readLANEvent(t, ctx, browser, lantransfer.SignalAnswer)
+
+	writeLANSignal(t, ctx, browser, lantransfer.ClientSignal{
+		Type: lantransfer.SignalICE, SessionID: androidSession,
+		Data: json.RawMessage(`{"candidate":"candidate:1 1 UDP 1 192.168.1.20 5000 typ host"}`),
+	})
+	iceEvent := readLANEvent(t, ctx, android, lantransfer.SignalICE)
+
+	writeLANSignal(t, ctx, android, lantransfer.ClientSignal{
+		Type: lantransfer.SignalConnected, SessionID: androidSession,
+	})
 
 	writeLANSignal(t, ctx, android, lantransfer.ClientSignal{
 		Type: lantransfer.SignalICE, SessionID: androidSession,
@@ -68,6 +89,44 @@ func TestWebsocketRelaysAuthenticatedLANSignals(t *testing.T) {
 	errorData, _ := json.Marshal(errorEvent.Data)
 	if !json.Valid(errorData) || !containsJSONValue(errorData, "LAN_NON_HOST_CANDIDATE") {
 		t.Fatalf("LAN error = %s", errorData)
+	}
+
+	assertLANExchangePrivate(t, db, dataDir, []realtime.Event{
+		androidOnline, browserOnline, offerEvent, answerEvent, iceEvent, errorEvent,
+	})
+}
+
+func assertLANExchangePrivate(t *testing.T, db interface {
+	QueryRow(query string, args ...any) *sql.Row
+}, dataDir string, events []realtime.Event) {
+	t.Helper()
+	for _, table := range []string{"messages", "files", "upload_batches"} {
+		var count int
+		if err := db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s gained %d rows during LAN signaling", table, count)
+		}
+	}
+	for _, directory := range []string{"files", "thumbs", "tmp"} {
+		entries, err := os.ReadDir(filepath.Join(dataDir, directory))
+		if err != nil {
+			t.Fatalf("read %s: %v", directory, err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("LAN signaling wrote data files in %s: %#v", directory, entries)
+		}
+	}
+	encoded, err := json.Marshal(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lower := strings.ToLower(string(encoded))
+	for _, forbidden := range []string{"file_offer", "filename", "mime", "sha256", "size_bytes"} {
+		if strings.Contains(lower, forbidden) {
+			t.Fatalf("LAN server event leaked %q: %s", forbidden, encoded)
+		}
 	}
 }
 

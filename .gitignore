@@ -11,6 +11,8 @@ bin/
 *.exe
 *.test
 *.out
+.gocache/
+.gomodcache/
 
 # Web dependencies and output
 web/node_modules/
@@ -20,6 +22,7 @@ web/*.tsbuildinfo
 
 # Android / Gradle
 android/.gradle/
+android/.kotlin/
 android/local.properties
 android/**/build/
 .gradle-cache/

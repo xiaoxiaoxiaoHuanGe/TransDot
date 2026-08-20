@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LAN_CHUNK_BYTES } from './protocol'
 import {
   BUFFERED_AMOUNT_HIGH,
@@ -76,7 +76,20 @@ class FakeDirectory implements DirectoryHandle {
 }
 
 describe('LanPeer', () => {
-  afterEach(() => vi.useRealTimers())
+  let originalFetch: typeof globalThis.fetch
+  let cloudFetch: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch
+    cloudFetch = vi.fn()
+    globalThis.fetch = cloudFetch as unknown as typeof globalThis.fetch
+  })
+
+  afterEach(() => {
+    expect(cloudFetch).not.toHaveBeenCalled()
+    globalThis.fetch = originalFetch
+    vi.useRealTimers()
+  })
 
   it('creates an empty-ICE ordered DataChannel and becomes connected', async () => {
     const signals = new FakeSignals()
