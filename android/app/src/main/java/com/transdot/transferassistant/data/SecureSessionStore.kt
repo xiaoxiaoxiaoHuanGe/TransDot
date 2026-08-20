@@ -30,6 +30,7 @@ interface SessionStore {
     fun load(): StoredSession?
     fun prepare()
     fun save(session: ClaimedSession)
+    fun replaceActive(session: ClaimedSession) = save(session)
     fun profiles(): List<ServerProfileSummary> = load()?.let {
         listOf(ServerProfileSummary(it.profileId, it.profileName.ifBlank { defaultProfileName(it.serverAddress) }, it.serverAddress))
     }.orEmpty()
@@ -87,7 +88,8 @@ class SecureSessionStore(context: Context) : SessionStore {
     override fun save(session: ClaimedSession) {
         val profiles = loadStoredProfiles().toMutableList()
         val existing = profiles.firstOrNull {
-            it.serverAddress == session.serverAddress && it.deviceId == session.deviceId && it.instanceId == session.instanceId
+            it.serverAddress == session.serverAddress &&
+                ((session.instanceId.isNotBlank() && it.instanceId == session.instanceId) || it.deviceId == session.deviceId)
         }
         val encrypted = encryptToken(session.masterToken)
         val profile = StoredProfile(
@@ -102,6 +104,29 @@ class SecureSessionStore(context: Context) : SessionStore {
         )
         if (existing == null) profiles += profile else profiles[profiles.indexOf(existing)] = profile
         check(writeProfiles(profiles, profile.id)) { "Unable to persist the Android master session." }
+        clearLegacyValues()
+    }
+
+    @Synchronized
+    override fun replaceActive(session: ClaimedSession) {
+        val profiles = loadStoredProfiles().toMutableList()
+        check(profiles.isNotEmpty()) { "No active server profile is available to replace." }
+        val activeId = preferences.getString(KEY_ACTIVE_PROFILE_ID, null)
+        val index = profiles.indexOfFirst { it.id == activeId }.takeIf { it >= 0 } ?: 0
+        val existing = profiles[index]
+        val existingAddress = ServerAddress.normalize(existing.serverAddress, allowCleartext = true)
+        val claimedAddress = ServerAddress.normalize(session.serverAddress, allowCleartext = true)
+        check(existingAddress == claimedAddress) { "Rebind server does not match the active profile." }
+        val encrypted = encryptToken(session.masterToken)
+        profiles[index] = existing.copy(
+            serverAddress = claimedAddress,
+            deviceId = session.deviceId,
+            encryptedToken = encrypted.first,
+            tokenIv = encrypted.second,
+            instanceId = session.instanceId,
+            instanceFingerprint = session.instanceFingerprint,
+        )
+        check(writeProfiles(profiles, existing.id)) { "Unable to persist the rebound Android master session." }
         clearLegacyValues()
     }
 

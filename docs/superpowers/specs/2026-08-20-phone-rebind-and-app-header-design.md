@@ -28,14 +28,15 @@
 
 ### 3.1 数据库
 
-新增迁移 `009_rebind_sessions.sql`：
+新增迁移 `010_rebind_sessions.sql`；`009_server_instance_compat.sql` 继续负责兼容旧的迁移编号冲突：
 
 ```sql
 CREATE TABLE rebind_sessions (
     id TEXT PRIMARY KEY,
     instance_id TEXT NOT NULL,
     secret_hash BLOB NOT NULL CHECK (length(secret_hash) = 32),
-    status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'expired', 'consumed')),
+    browser_device_id TEXT NOT NULL REFERENCES devices(id),
+    status TEXT NOT NULL CHECK (status IN ('pending', 'expired', 'consumed')),
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL,
     consumed_at TEXT
@@ -52,6 +53,8 @@ CREATE INDEX rebind_sessions_expiry ON rebind_sessions(status, expires_at);
 - 仅接受有效 `transfer_browser_v1` Cookie。
 - 要求 `app_state.initialized = 1`。
 - 返回 `session_id`、`qr_payload`、`expires_at` 和轮询间隔。
+- 同一浏览器创建新会话时，原有待处理会话立即标记为 `expired`，保证刷新二维码等同于轮换凭据。
+- 反向代理部署必须配置 HTTPS `PUBLIC_URL`；未配置时只接受服务进程直接终止 TLS 的请求。
 - QR payload 使用版本 2：
 
 ```json
@@ -70,7 +73,7 @@ CREATE INDEX rebind_sessions_expiry ON rebind_sessions(status, expires_at);
 `GET /api/v1/rebind/sessions/{id}/status`
 
 - 仅允许创建会话的浏览器 Cookie 查询。
-- 返回 `pending`、`approved`、`consumed` 或 `expired`。
+- 返回 `pending`、`consumed` 或 `expired`。
 - 不返回 Master Token。
 
 `POST /api/v1/rebind/claim`

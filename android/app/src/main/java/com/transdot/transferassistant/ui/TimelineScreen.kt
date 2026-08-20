@@ -117,7 +117,7 @@ import com.transdot.transferassistant.data.ServerProfileDisplayStatus
 import com.transdot.transferassistant.data.ServerProfileSummary
 import com.transdot.transferassistant.data.TimelineMessage
 import com.transdot.transferassistant.data.UploadProgress
-import com.transdot.transferassistant.data.activeServerStatusLine
+import com.transdot.transferassistant.data.activeServerStatusLines
 import com.transdot.transferassistant.data.availableSaveLocationChoices
 import com.transdot.transferassistant.data.serverProfileStatus
 import com.transdot.transferassistant.data.serverProfileStatusLabel
@@ -742,7 +742,7 @@ internal fun TimelineTopBar(
     onSearch: () -> Unit,
     onSettings: () -> Unit,
 ) {
-    val statusLine = activeServerStatusLine(
+    val statusLines = activeServerStatusLines(
         activeServerName,
         serverProfileStatus(
             isActive = true,
@@ -750,7 +750,7 @@ internal fun TimelineTopBar(
             isConnecting = connection == TimelineConnectionState.Connecting,
         ),
     )
-    AppTopBar(title = "传输助手", subtitle = statusLine) {
+    AppTopBar(title = "传输助手", subtitleLines = statusLines) {
         TextButton(onClick = onOpenLanTransfer, modifier = Modifier.sizeIn(minHeight = 48.dp)) {
             Icon(
                 painter = painterResource(R.drawable.ic_send),

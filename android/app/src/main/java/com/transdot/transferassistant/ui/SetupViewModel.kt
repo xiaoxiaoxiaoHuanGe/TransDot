@@ -7,6 +7,8 @@ import com.transdot.transferassistant.data.ClaimedSession
 import com.transdot.transferassistant.data.BootstrapPayload
 import com.transdot.transferassistant.data.BootstrapRepository
 import com.transdot.transferassistant.data.SessionStore
+import com.transdot.transferassistant.data.RebindPayload
+import com.transdot.transferassistant.data.RebindRepository
 import com.transdot.transferassistant.data.SetupFailure
 import com.transdot.transferassistant.data.SetupRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,15 +26,19 @@ data class SetupUiState(
     val deviceId: String = "",
     val errorMessage: String? = null,
     val bootstrapPayload: BootstrapPayload? = null,
+    val rebindPayload: RebindPayload? = null,
 )
 
 class SetupViewModel(
     private val repository: SetupRepository,
     private val sessionStore: SessionStore,
     private val bootstrapRepository: BootstrapRepository? = null,
+    private val rebindRepository: RebindRepository? = null,
     private val allowCleartext: Boolean = false,
 ) : ViewModel() {
     private var pendingSession: ClaimedSession? = null
+    private var pendingBootstrapSession: ClaimedSession? = null
+    private var pendingRebindSession: ClaimedSession? = null
     private val storedSession = sessionStore.load()
     private val mutableUiState = MutableStateFlow(
         SetupUiState(
@@ -52,14 +58,51 @@ class SetupViewModel(
     }
 
     fun onBootstrapScanned(rawValue: String) {
-        val payload = runCatching { BootstrapPayload.parse(rawValue, allowCleartext) }.getOrElse { error ->
-            mutableUiState.update { it.copy(errorMessage = error.message ?: "这不是有效的服务器绑定二维码。") }
+        runCatching { BootstrapPayload.parse(rawValue, allowCleartext) }.getOrNull()?.let { payload ->
+            mutableUiState.update { it.copy(bootstrapPayload = payload, rebindPayload = null, serverAddress = payload.serverAddress, errorMessage = null) }
             return
         }
-        mutableUiState.update { it.copy(bootstrapPayload = payload, serverAddress = payload.serverAddress, errorMessage = null) }
+        runCatching { RebindPayload.parse(rawValue, allowCleartext) }.getOrNull()?.let { payload ->
+            mutableUiState.update { it.copy(bootstrapPayload = null, rebindPayload = payload, serverAddress = payload.serverAddress, errorMessage = null) }
+            return
+        }
+        mutableUiState.update { it.copy(errorMessage = "这不是有效的服务器绑定或重绑定二维码。") }
     }
 
-    fun cancelBootstrap() { mutableUiState.update { it.copy(bootstrapPayload = null) } }
+    fun cancelBootstrap() {
+        pendingBootstrapSession = null
+        mutableUiState.update {
+            it.copy(
+                bootstrapPayload = null,
+                serverAddress = pendingServerAddress() ?: it.serverAddress,
+                needsSecureStorageRetry = hasPendingSession(),
+            )
+        }
+    }
+
+    fun cancelRebind() {
+        pendingRebindSession = null
+        mutableUiState.update {
+            it.copy(
+                rebindPayload = null,
+                serverAddress = pendingServerAddress() ?: it.serverAddress,
+                needsSecureStorageRetry = hasPendingSession(),
+            )
+        }
+    }
+
+    fun confirmRebind() {
+        val payload = mutableUiState.value.rebindPayload ?: return
+        val repository = rebindRepository ?: return
+        mutableUiState.update { it.copy(isSubmitting = true, errorMessage = null) }
+        viewModelScope.launch {
+            runCatching {
+                val session = pendingRebindSession ?: run { sessionStore.prepare(); repository.claim(payload).also { pendingRebindSession = it } }
+                sessionStore.save(session); clearPendingSessions(); session
+            }.onSuccess { session -> mutableUiState.update { it.copy(isSubmitting = false, isReady = true, rebindPayload = null, needsSecureStorageRetry = false, deviceId = session.deviceId) } }
+                .onFailure { error -> mutableUiState.update { it.copy(isSubmitting = false, needsSecureStorageRetry = hasPendingSession(), errorMessage = error.message ?: "手机重绑定失败。") } }
+        }
+    }
 
     fun confirmBootstrap() {
         val payload = mutableUiState.value.bootstrapPayload ?: return
@@ -67,15 +110,15 @@ class SetupViewModel(
         mutableUiState.update { it.copy(isSubmitting = true, errorMessage = null) }
         viewModelScope.launch {
             runCatching {
-                val session = pendingSession ?: run {
+                val session = pendingBootstrapSession ?: run {
                     sessionStore.prepare()
-                    repository.claim(payload).also { pendingSession = it }
+                    repository.claim(payload).also { pendingBootstrapSession = it }
                 }
                 sessionStore.save(session)
-                pendingSession = null
+                clearPendingSessions()
                 session
             }.onSuccess { session -> mutableUiState.update { it.copy(isSubmitting = false, isReady = true, bootstrapPayload = null, needsSecureStorageRetry = false, deviceId = session.deviceId) } }
-                .onFailure { error -> mutableUiState.update { it.copy(isSubmitting = false, needsSecureStorageRetry = pendingSession != null, errorMessage = error.message ?: "扫码绑定失败。") } }
+                .onFailure { error -> mutableUiState.update { it.copy(isSubmitting = false, needsSecureStorageRetry = hasPendingSession(), errorMessage = error.message ?: "扫码绑定失败。") } }
         }
     }
 
@@ -108,7 +151,7 @@ class SetupViewModel(
                 } catch (failure: Exception) {
                     throw SetupFailure.SecureStorage(failure)
                 }
-                pendingSession = null
+                clearPendingSessions()
                 session
             }.onSuccess { session ->
                 mutableUiState.update {
@@ -128,7 +171,7 @@ class SetupViewModel(
                         serverAddress = pending?.serverAddress ?: it.serverAddress,
                         setupToken = if (pending != null) "" else it.setupToken,
                         isSubmitting = false,
-                        needsSecureStorageRetry = pending != null,
+                        needsSecureStorageRetry = hasPendingSession(),
                         errorMessage = error.message ?: "初始化失败，请稍后重试。",
                     )
                 }
@@ -136,16 +179,29 @@ class SetupViewModel(
         }
     }
 
+    private fun hasPendingSession(): Boolean =
+        pendingSession != null || pendingBootstrapSession != null || pendingRebindSession != null
+
+    private fun pendingServerAddress(): String? =
+        pendingRebindSession?.serverAddress ?: pendingBootstrapSession?.serverAddress ?: pendingSession?.serverAddress
+
+    private fun clearPendingSessions() {
+        pendingSession = null
+        pendingBootstrapSession = null
+        pendingRebindSession = null
+    }
+
     class Factory(
         private val repository: SetupRepository,
         private val sessionStore: SessionStore,
         private val bootstrapRepository: BootstrapRepository? = null,
+        private val rebindRepository: RebindRepository? = null,
         private val allowCleartext: Boolean = false,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             require(modelClass.isAssignableFrom(SetupViewModel::class.java))
-            return SetupViewModel(repository, sessionStore, bootstrapRepository, allowCleartext) as T
+            return SetupViewModel(repository, sessionStore, bootstrapRepository, rebindRepository, allowCleartext) as T
         }
     }
 }

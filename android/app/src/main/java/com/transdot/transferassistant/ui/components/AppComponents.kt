@@ -26,6 +26,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.transdot.transferassistant.R
 import com.transdot.transferassistant.ui.theme.AppSpacing
@@ -64,6 +65,7 @@ fun AppTopBar(
     title: String,
     modifier: Modifier = Modifier,
     subtitle: String? = null,
+    subtitleLines: List<String>? = null,
     onBack: (() -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
@@ -99,11 +101,14 @@ fun AppTopBar(
                     style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.onBackground,
                 )
-                if (subtitle != null) {
+                val lines = subtitleLines ?: subtitle?.let(::listOf).orEmpty()
+                lines.forEachIndexed { index, line ->
                     Text(
-                        text = subtitle,
+                        text = line,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = if (index == 0 && lines.size > 1) TextOverflow.Ellipsis else TextOverflow.Clip,
                     )
                 }
             }

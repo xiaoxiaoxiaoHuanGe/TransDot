@@ -42,4 +42,12 @@ class ServerProfilesTest {
         assertEquals("家中服务器 · 已连接", activeServerStatusLine("家中服务器", ServerProfileDisplayStatus.Connected))
         assertEquals("云服务器 · 连接中", activeServerStatusLine("云服务器", ServerProfileDisplayStatus.Connecting))
     }
+
+    @Test
+    fun activeServerStatusLinesKeepAddressAndStatusOnSeparateRows() {
+        assertEquals(
+            listOf("117.72.97.238", "已连接"),
+            activeServerStatusLines("117.72.97.238", ServerProfileDisplayStatus.Connected),
+        )
+    }
 }

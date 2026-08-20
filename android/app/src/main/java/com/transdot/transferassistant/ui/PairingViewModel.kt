@@ -12,6 +12,9 @@ import com.transdot.transferassistant.data.PairingPayload
 import com.transdot.transferassistant.data.PairingRepository
 import com.transdot.transferassistant.data.SessionStore
 import com.transdot.transferassistant.data.StoredSession
+import com.transdot.transferassistant.data.RebindPayload
+import com.transdot.transferassistant.data.RebindRepository
+import com.transdot.transferassistant.data.ServerAddress
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -34,18 +37,21 @@ data class PairingUiState(
     val replacementRequired: Boolean = false,
     val errorMessage: String? = null,
     val bootstrapPayload: BootstrapPayload? = null,
+    val rebindPayload: RebindPayload? = null,
 )
 
 class PairingViewModel(
     private val repository: PairingRepository,
     private val sessionStore: SessionStore,
     private val bootstrapRepository: BootstrapRepository? = null,
+    private val rebindRepository: RebindRepository? = null,
     private val allowCleartext: Boolean = false,
     private val onBootstrapSaved: () -> Unit = {},
 ) : ViewModel() {
     private val storedSession: StoredSession? = sessionStore.load()
     private var pendingCredential: PairingCredential? = null
     private var pendingBootstrapSession: ClaimedSession? = null
+    private var pendingRebindSession: ClaimedSession? = null
     private val mutableUiState = MutableStateFlow(
         PairingUiState(
             serverAddress = storedSession?.serverAddress.orEmpty(),
@@ -102,6 +108,20 @@ class PairingViewModel(
                 return
             }
         }
+        if (rebindRepository != null) {
+            runCatching { RebindPayload.parse(rawValue, allowCleartext) }.getOrNull()?.let { payload ->
+                val current = storedSession
+                val sameOrigin = current != null && runCatching {
+                    ServerAddress.normalize(current.serverAddress, allowCleartext) == payload.serverAddress
+                }.getOrDefault(false)
+                if (current == null || !sameOrigin || (current.instanceId.isNotBlank() && current.instanceId != payload.instanceId)) {
+                    mutableUiState.update { it.copy(errorMessage = "二维码属于另一台服务器实例，不能覆盖当前档案。") }
+                } else {
+                    mutableUiState.update { it.copy(rebindPayload = payload, errorMessage = null) }
+                }
+                return
+            }
+        }
         val credential = runCatching { PairingPayload.parse(rawValue) }.getOrElse { error ->
             mutableUiState.update {
                 it.copy(errorMessage = error.message ?: "这不是有效的传输助手二维码。")
@@ -112,6 +132,23 @@ class PairingViewModel(
     }
 
     fun cancelBootstrap() { pendingBootstrapSession = null; mutableUiState.update { it.copy(bootstrapPayload = null) } }
+
+    fun cancelRebind() { pendingRebindSession = null; mutableUiState.update { it.copy(rebindPayload = null) } }
+
+    fun confirmRebind() {
+        val payload = mutableUiState.value.rebindPayload ?: return
+        val rebind = rebindRepository ?: return
+        mutableUiState.update { it.copy(isSubmitting = true, errorMessage = null) }
+        viewModelScope.launch {
+            runCatching {
+                val claimed = pendingRebindSession ?: run { sessionStore.prepare(); rebind.claim(payload).also { pendingRebindSession = it } }
+                sessionStore.replaceActive(claimed); pendingRebindSession = null; claimed
+            }.onSuccess {
+                mutableUiState.update { state -> state.copy(isSubmitting = false, rebindPayload = null, screen = PairingScreen.Success) }
+                onBootstrapSaved()
+            }.onFailure { error -> mutableUiState.update { it.copy(isSubmitting = false, errorMessage = error.message ?: "手机重绑定失败。") } }
+        }
+    }
 
     fun confirmBootstrap() {
         val payload = mutableUiState.value.bootstrapPayload ?: return
@@ -207,13 +244,14 @@ class PairingViewModel(
         private val repository: PairingRepository,
         private val sessionStore: SessionStore,
         private val bootstrapRepository: BootstrapRepository? = null,
+        private val rebindRepository: RebindRepository? = null,
         private val allowCleartext: Boolean = false,
         private val onBootstrapSaved: () -> Unit = {},
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             require(modelClass.isAssignableFrom(PairingViewModel::class.java))
-            return PairingViewModel(repository, sessionStore, bootstrapRepository, allowCleartext, onBootstrapSaved) as T
+            return PairingViewModel(repository, sessionStore, bootstrapRepository, rebindRepository, allowCleartext, onBootstrapSaved) as T
         }
     }
 

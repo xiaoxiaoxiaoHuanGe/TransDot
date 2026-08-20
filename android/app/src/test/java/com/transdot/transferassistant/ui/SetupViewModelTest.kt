@@ -4,6 +4,8 @@ import com.transdot.transferassistant.data.ClaimedSession
 import com.transdot.transferassistant.data.BootstrapPayload
 import com.transdot.transferassistant.data.BootstrapRepository
 import com.transdot.transferassistant.data.SessionStore
+import com.transdot.transferassistant.data.RebindPayload
+import com.transdot.transferassistant.data.RebindRepository
 import com.transdot.transferassistant.data.SetupRepository
 import com.transdot.transferassistant.data.StoredSession
 import kotlinx.coroutines.Dispatchers
@@ -105,6 +107,90 @@ class SetupViewModelTest {
         assertTrue(viewModel.uiState.value.isReady)
     }
 
+    @Test
+    fun confirmsRebindAndStoresReplacementSession() = runTest(dispatcher.scheduler) {
+        val claimed = ClaimedSession("https://transfer.example.com", "device-new", "token-new", "instance-2", "7f3a-91c2")
+        val store = FakeSessionStore(failSave = false)
+        val rebind = object : RebindRepository {
+            var calls = 0
+            override suspend fun claim(payload: RebindPayload): ClaimedSession { calls++; return claimed }
+        }
+        val viewModel = SetupViewModel(FakeSetupRepository(claimed), store, rebindRepository = rebind)
+
+        viewModel.onBootstrapScanned("""{"v":2,"kind":"rebind","server_url":"https://transfer.example.com","instance_id":"instance-2","instance_fingerprint":"7f3a-91c2","rebind_session_id":"123e4567-e89b-12d3-a456-426614174000","rebind_secret":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","expires_at":"2099-08-20T12:00:00Z"}""")
+        assertEquals("instance-2", viewModel.uiState.value.rebindPayload?.instanceId)
+        viewModel.confirmRebind()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, rebind.calls)
+        assertEquals(1, store.saveCalls)
+        assertTrue(viewModel.uiState.value.isReady)
+    }
+
+    @Test
+    fun rebindDoesNotReusePendingManualSetupSession() = runTest(dispatcher.scheduler) {
+        val setupSession = ClaimedSession("https://transfer.example.com", "setup-device", "setup-token")
+        val reboundSession = ClaimedSession("https://transfer.example.com", "rebound-device", "rebound-token", "instance-2", "7f3a-91c2")
+        val store = FakeSessionStore(failSave = true)
+        val rebind = object : RebindRepository {
+            var calls = 0
+            override suspend fun claim(payload: RebindPayload): ClaimedSession { calls++; return reboundSession }
+        }
+        val viewModel = SetupViewModel(FakeSetupRepository(setupSession), store, rebindRepository = rebind)
+        viewModel.updateServerAddress(setupSession.serverAddress)
+        viewModel.updateSetupToken("owner-token")
+        viewModel.claimServer()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        store.failSave = false
+        viewModel.onBootstrapScanned("""{"v":2,"kind":"rebind","server_url":"https://transfer.example.com","instance_id":"instance-2","instance_fingerprint":"7f3a-91c2","rebind_session_id":"123e4567-e89b-12d3-a456-426614174000","rebind_secret":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","expires_at":"2099-08-20T12:00:00Z"}""")
+        viewModel.confirmRebind()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, rebind.calls)
+        assertEquals("rebound-device", store.savedSessions.last().deviceId)
+    }
+
+    @Test
+    fun failedRebindClaimPreservesPendingManualSaveState() = runTest(dispatcher.scheduler) {
+        val setupSession = ClaimedSession("https://setup.example.com", "setup-device", "setup-token")
+        val store = FakeSessionStore(failSave = true)
+        val failingRebind = object : RebindRepository {
+            override suspend fun claim(payload: RebindPayload): ClaimedSession = error("claim failed")
+        }
+        val viewModel = SetupViewModel(FakeSetupRepository(setupSession), store, rebindRepository = failingRebind)
+        viewModel.updateServerAddress(setupSession.serverAddress)
+        viewModel.updateSetupToken("owner-token")
+        viewModel.claimServer()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.onBootstrapScanned("""{"v":2,"kind":"rebind","server_url":"https://transfer.example.com","instance_id":"instance-2","instance_fingerprint":"7f3a-91c2","rebind_session_id":"123e4567-e89b-12d3-a456-426614174000","rebind_secret":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","expires_at":"2099-08-20T12:00:00Z"}""")
+        viewModel.confirmRebind()
+        dispatcher.scheduler.advanceUntilIdle()
+        viewModel.cancelRebind()
+
+        assertTrue(viewModel.uiState.value.needsSecureStorageRetry)
+        assertEquals(setupSession.serverAddress, viewModel.uiState.value.serverAddress)
+    }
+
+    @Test
+    fun cancellingRebindAfterSaveFailureClearsItsRetryState() = runTest(dispatcher.scheduler) {
+        val reboundSession = ClaimedSession("https://transfer.example.com", "rebound-device", "rebound-token", "instance-2", "7f3a-91c2")
+        val store = FakeSessionStore(failSave = true)
+        val rebind = object : RebindRepository {
+            override suspend fun claim(payload: RebindPayload): ClaimedSession = reboundSession
+        }
+        val viewModel = SetupViewModel(FakeSetupRepository(reboundSession), store, rebindRepository = rebind)
+        viewModel.onBootstrapScanned("""{"v":2,"kind":"rebind","server_url":"https://transfer.example.com","instance_id":"instance-2","instance_fingerprint":"7f3a-91c2","rebind_session_id":"123e4567-e89b-12d3-a456-426614174000","rebind_secret":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","expires_at":"2099-08-20T12:00:00Z"}""")
+        viewModel.confirmRebind()
+        dispatcher.scheduler.advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.needsSecureStorageRetry)
+
+        viewModel.cancelRebind()
+
+        assertFalse(viewModel.uiState.value.needsSecureStorageRetry)
+    }
+
     private class FakeSetupRepository(
         private val claimedSession: ClaimedSession,
     ) : SetupRepository {
@@ -122,6 +208,7 @@ class SetupViewModelTest {
         var failSave: Boolean,
     ) : SessionStore {
         var saveCalls = 0
+        val savedSessions = mutableListOf<ClaimedSession>()
 
         override fun load(): StoredSession? = null
 
@@ -130,6 +217,7 @@ class SetupViewModelTest {
         override fun save(session: ClaimedSession) {
             saveCalls++
             if (failSave) error("simulated secure storage failure")
+            savedSessions += session
         }
     }
 }

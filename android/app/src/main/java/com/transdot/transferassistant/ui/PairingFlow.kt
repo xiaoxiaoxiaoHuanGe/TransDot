@@ -75,6 +75,8 @@ fun PairingFlow(
     onCancelReplacement: () -> Unit,
     onConfirmBootstrap: () -> Unit = {},
     onCancelBootstrap: () -> Unit = {},
+    onConfirmRebind: () -> Unit = {},
+    onCancelRebind: () -> Unit = {},
 ) {
     when (state.screen) {
         PairingScreen.Home -> ReadyScreen(
@@ -121,6 +123,15 @@ fun PairingFlow(
             text = { Text("${payload.serverAddress}\n实例指纹 ${payload.instanceFingerprint.uppercase()}\n确认后会创建新的服务器档案。") },
             confirmButton = { Button(onClick = onConfirmBootstrap, enabled = !state.isSubmitting) { Text("确认绑定") } },
             dismissButton = { TextButton(onClick = onCancelBootstrap, enabled = !state.isSubmitting) { Text("取消") } },
+        )
+    }
+    state.rebindPayload?.let { payload ->
+        AlertDialog(
+            onDismissRequest = onCancelRebind,
+            title = { Text("重新绑定当前手机？") },
+            text = { Text("${payload.serverAddress}\n实例指纹 ${payload.instanceFingerprint.uppercase()}\n确认后服务器会撤销旧手机凭据。") },
+            confirmButton = { Button(onClick = onConfirmRebind, enabled = !state.isSubmitting) { Text("确认重绑定") } },
+            dismissButton = { TextButton(onClick = onCancelRebind, enabled = !state.isSubmitting) { Text("取消") } },
         )
     }
 }

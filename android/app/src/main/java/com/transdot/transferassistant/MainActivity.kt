@@ -34,10 +34,12 @@ import com.transdot.transferassistant.data.AppSettings
 import com.transdot.transferassistant.data.DownloadDestinationManager
 import com.transdot.transferassistant.data.NetworkPairingRepository
 import com.transdot.transferassistant.data.NetworkBootstrapRepository
+import com.transdot.transferassistant.data.NetworkRebindRepository
 import com.transdot.transferassistant.data.NetworkTimelineRepository
 import com.transdot.transferassistant.data.SecureSessionStore
 import com.transdot.transferassistant.data.SessionStore
 import com.transdot.transferassistant.data.SystemTransferNotifier
+import com.transdot.transferassistant.data.defaultProfileName
 import com.transdot.transferassistant.lan.AndroidLanContentAccess
 import com.transdot.transferassistant.lan.AndroidLanForegroundController
 import com.transdot.transferassistant.lan.AndroidLanPeerFactory
@@ -74,6 +76,7 @@ class MainActivity : ComponentActivity() {
             val repository = remember { NetworkSetupRepository(allowCleartext = BuildConfig.DEBUG) }
             val sessionStore = remember { SecureSessionStore(applicationContext) }
             val bootstrapRepository = remember { NetworkBootstrapRepository(allowCleartext = BuildConfig.DEBUG) }
+            val rebindRepository = remember { NetworkRebindRepository(allowCleartext = BuildConfig.DEBUG) }
             val validationRepository = remember { NetworkTimelineRepository(allowCleartext = BuildConfig.DEBUG, context = applicationContext) }
             val appPreferences = remember { AppPreferences(applicationContext) }
             val downloadDestinationManager = remember { DownloadDestinationManager(applicationContext, appPreferences) }
@@ -94,7 +97,7 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background,
                 ) {
                     key(sessionGeneration) {
-                        val factory = remember(sessionGeneration) { SetupViewModel.Factory(repository, sessionStore, bootstrapRepository, BuildConfig.DEBUG) }
+                        val factory = remember(sessionGeneration) { SetupViewModel.Factory(repository, sessionStore, bootstrapRepository, rebindRepository, BuildConfig.DEBUG) }
                         val setupViewModel: SetupViewModel = viewModel(key = "setup-$sessionGeneration", factory = factory)
                         val uiState by setupViewModel.uiState.collectAsStateWithLifecycle()
                         AnimatedContent(
@@ -166,6 +169,8 @@ class MainActivity : ComponentActivity() {
                                     onBootstrapQRCode = setupViewModel::onBootstrapScanned,
                                     onConfirmBootstrap = setupViewModel::confirmBootstrap,
                                     onCancelBootstrap = setupViewModel::cancelBootstrap,
+                                    onConfirmRebind = setupViewModel::confirmRebind,
+                                    onCancelRebind = setupViewModel::cancelRebind,
                                 )
                             }
                         }
@@ -252,9 +257,10 @@ private fun PairingContent(
 ) {
     val pairingRepository = remember { NetworkPairingRepository(allowCleartext = BuildConfig.DEBUG) }
     val bootstrapRepository = remember { NetworkBootstrapRepository(allowCleartext = BuildConfig.DEBUG) }
+    val rebindRepository = remember { NetworkRebindRepository(allowCleartext = BuildConfig.DEBUG) }
     val context = androidx.compose.ui.platform.LocalContext.current
     val timelineRepository = remember { NetworkTimelineRepository(allowCleartext = BuildConfig.DEBUG, context = context.applicationContext) }
-    val pairingFactory = remember { PairingViewModel.Factory(pairingRepository, sessionStore, bootstrapRepository, BuildConfig.DEBUG, onSessionChanged) }
+    val pairingFactory = remember { PairingViewModel.Factory(pairingRepository, sessionStore, bootstrapRepository, rebindRepository, BuildConfig.DEBUG, onSessionChanged) }
     val timelineFactory = remember { TimelineViewModel.Factory(timelineRepository, sessionStore, notifier) }
     val lanHttpClient = remember { OkHttpClient() }
     val profileId = sessionStore.activeProfileId().orEmpty()
@@ -263,7 +269,7 @@ private fun PairingContent(
     val pairingUiState by pairingViewModel.uiState.collectAsStateWithLifecycle()
     val timelineUiState by timelineViewModel.uiState.collectAsStateWithLifecycle()
     val serverProfiles = sessionStore.profiles()
-    val activeServerName = serverProfiles.firstOrNull { it.id == profileId }?.name ?: "当前服务器"
+    val activeServerName = serverProfiles.firstOrNull { it.id == profileId }?.serverAddress?.let(::defaultProfileName) ?: "当前服务器"
     var lanOpen by rememberSaveable(profileId) { mutableStateOf(false) }
     var lanGeneration by rememberSaveable(profileId) { mutableStateOf(0) }
 
@@ -357,6 +363,8 @@ private fun PairingContent(
             onCancelReplacement = pairingViewModel::cancelReplacement,
             onConfirmBootstrap = pairingViewModel::confirmBootstrap,
             onCancelBootstrap = pairingViewModel::cancelBootstrap,
+            onConfirmRebind = pairingViewModel::confirmRebind,
+            onCancelRebind = pairingViewModel::cancelRebind,
         )
     }
 }

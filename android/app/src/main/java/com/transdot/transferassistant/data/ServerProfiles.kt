@@ -42,6 +42,9 @@ fun serverProfileStatusLabel(status: ServerProfileDisplayStatus): String = when 
 fun activeServerStatusLine(serverName: String, status: ServerProfileDisplayStatus): String =
     "$serverName · ${serverProfileStatusLabel(status)}"
 
+fun activeServerStatusLines(serverName: String, status: ServerProfileDisplayStatus): List<String> =
+    listOf(serverName, serverProfileStatusLabel(status))
+
 fun selectActiveProfile(profiles: List<ServerProfileSummary>, profileId: String): ServerProfileSummary? =
     profiles.firstOrNull { it.id == profileId }
 

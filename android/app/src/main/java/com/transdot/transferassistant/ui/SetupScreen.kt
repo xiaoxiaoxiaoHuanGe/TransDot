@@ -61,6 +61,8 @@ fun SetupScreen(
     onBootstrapQRCode: (String) -> Unit = {},
     onConfirmBootstrap: () -> Unit = {},
     onCancelBootstrap: () -> Unit = {},
+    onConfirmRebind: () -> Unit = {},
+    onCancelRebind: () -> Unit = {},
 ) {
     var scanning by remember { mutableStateOf(false) }
     Scaffold(
@@ -115,6 +117,15 @@ fun SetupScreen(
             text = { Text("${payload.serverAddress}\n实例指纹 ${payload.instanceFingerprint.uppercase()}") },
             confirmButton = { Button(onClick = onConfirmBootstrap, enabled = !state.isSubmitting) { Text("确认绑定") } },
             dismissButton = { TextButton(onClick = onCancelBootstrap, enabled = !state.isSubmitting) { Text("取消") } },
+        )
+    }
+    state.rebindPayload?.let { payload ->
+        AlertDialog(
+            onDismissRequest = onCancelRebind,
+            title = { Text("重新绑定这台服务器？") },
+            text = { Text("${payload.serverAddress}\n实例指纹 ${payload.instanceFingerprint.uppercase()}\n确认后旧手机会立即断开连接。") },
+            confirmButton = { Button(onClick = onConfirmRebind, enabled = !state.isSubmitting) { Text("确认重绑定") } },
+            dismissButton = { TextButton(onClick = onCancelRebind, enabled = !state.isSubmitting) { Text("取消") } },
         )
     }
 }

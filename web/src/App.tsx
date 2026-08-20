@@ -2,10 +2,11 @@ import { ChangeEvent, ClipboardEvent, DragEvent, FormEvent, KeyboardEvent, useCa
 import { QRCodeSVG } from 'qrcode.react'
 import { LanTransferView } from './lan/LanTransferView'
 import { instanceHostLabel, pairingTransportGuidance, parseRetryAfterSeconds, unauthenticatedFlow } from './pairingPolicy'
+import { RebindStatus, rebindScreenForStatus } from './rebindPolicy'
 import { DownloadDirectory, downloadFilesToDirectory, fileFingerprint, partitionRepeatedFiles } from './transferTools'
 
 type PairingStatus = 'pending' | 'approved' | 'rejected' | 'expired' | 'consumed'
-type ScreenState = 'loading' | 'bootstrap' | 'pairing' | 'paired' | 'rejected' | 'expired' | 'replaced' | 'insecure' | 'error'
+type ScreenState = 'loading' | 'bootstrap' | 'pairing' | 'rebind' | 'paired' | 'rejected' | 'expired' | 'replaced' | 'insecure' | 'error'
 type ConnectionState = 'connecting' | 'connected' | 'offline'
 
 type PairingSession = {
@@ -20,6 +21,13 @@ type BootstrapSession = {
   session_id: string
   qr_payload: string
   instance_fingerprint: string
+  expires_at: string
+  poll_interval_seconds: number
+}
+
+type RebindSession = {
+  session_id: string
+  qr_payload: string
   expires_at: string
   poll_interval_seconds: number
 }
@@ -234,14 +242,17 @@ function App() {
   const [screen, setScreen] = useState<ScreenState>('loading')
   const [session, setSession] = useState<PairingSession | null>(null)
   const [bootstrapSession, setBootstrapSession] = useState<BootstrapSession | null>(null)
+  const [rebindSession, setRebindSession] = useState<RebindSession | null>(null)
   const [authSession, setAuthSession] = useState<AuthSession | null>(null)
   const [errorMessage, setErrorMessage] = useState('')
   const [retryAfterSeconds, setRetryAfterSeconds] = useState(0)
   const [retryBootstrap, setRetryBootstrap] = useState(false)
+  const [retryRebind, setRetryRebind] = useState(false)
   const [now, setNow] = useState(() => Date.now())
   const creatingSessionRef = useRef(false)
 
   const createBootstrapSession = useCallback(async (signal?: AbortSignal) => {
+    setRetryRebind(false)
     setRetryBootstrap(true)
     if (creatingSessionRef.current) return
     const transportGuidance = pairingTransportGuidance(window.location)
@@ -265,6 +276,7 @@ function App() {
   }, [])
 
   const createSession = useCallback(async (signal?: AbortSignal) => {
+    setRetryRebind(false)
     setRetryBootstrap(false)
     if (creatingSessionRef.current) return
     const transportGuidance = pairingTransportGuidance(window.location)
@@ -306,6 +318,26 @@ function App() {
     const authenticated = await request<AuthSession>('/api/v1/auth/session', { signal })
     setAuthSession(authenticated)
     setScreen('paired')
+  }, [])
+
+  const createRebindSession = useCallback(async (signal?: AbortSignal) => {
+    setRetryRebind(true)
+    if (creatingSessionRef.current) return
+    const transportGuidance = pairingTransportGuidance(window.location)
+    if (transportGuidance) { setErrorMessage(transportGuidance); setScreen('insecure'); return }
+    creatingSessionRef.current = true
+    setScreen('loading')
+    setErrorMessage('')
+    try {
+      const created = await request<RebindSession>('/api/v1/rebind/sessions', { method: 'POST', signal })
+      setRebindSession(created)
+      setNow(Date.now())
+      setScreen('rebind')
+    } catch (error) {
+      if (!isAbort(error)) { setErrorMessage(error instanceof Error ? error.message : '无法创建手机重绑定会话。'); setScreen('error') }
+    } finally {
+      creatingSessionRef.current = false
+    }
   }, [])
 
   useEffect(() => {
@@ -381,7 +413,25 @@ function App() {
   }, [enterTimeline, screen, session])
 
   useEffect(() => {
-    if (screen !== 'pairing' && screen !== 'bootstrap') return
+    if (screen !== 'rebind' || !rebindSession) return
+    const controller = new AbortController()
+    const poll = async () => {
+      try {
+        const result = await request<{ status: RebindStatus }>(`/api/v1/rebind/sessions/${encodeURIComponent(rebindSession.session_id)}/status`, { signal: controller.signal })
+        const next = rebindScreenForStatus(result.status)
+        if (next === 'paired') { setRetryRebind(false); setRebindSession(null); await enterTimeline(controller.signal) }
+        else if (next === 'expired') setScreen('expired')
+      } catch (error) {
+        if (!isAbort(error)) { setErrorMessage(error instanceof Error ? error.message : '无法查询手机重绑定状态。'); setScreen('error') }
+      }
+    }
+    const timer = window.setInterval(() => void poll(), Math.max(1, rebindSession.poll_interval_seconds) * 1000)
+    void poll()
+    return () => { controller.abort(); window.clearInterval(timer) }
+  }, [enterTimeline, rebindSession, screen])
+
+  useEffect(() => {
+    if (screen !== 'pairing' && screen !== 'bootstrap' && screen !== 'rebind') return
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
   }, [screen])
@@ -395,13 +445,13 @@ function App() {
   }, [retryAfterSeconds > 0])
 
   const secondsRemaining = useMemo(() => {
-    const expiry = screen === 'bootstrap' ? bootstrapSession?.expires_at : session?.expires_at
+    const expiry = screen === 'bootstrap' ? bootstrapSession?.expires_at : screen === 'rebind' ? rebindSession?.expires_at : session?.expires_at
     if (!expiry) return 0
     return Math.max(0, Math.ceil((new Date(expiry).getTime() - now) / 1000))
-  }, [bootstrapSession, now, screen, session])
+  }, [bootstrapSession, now, rebindSession, screen, session])
 
   useEffect(() => {
-    if ((screen === 'pairing' || screen === 'bootstrap') && secondsRemaining === 0) setScreen('expired')
+    if ((screen === 'pairing' || screen === 'bootstrap' || screen === 'rebind') && secondsRemaining === 0) setScreen('expired')
   }, [screen, secondsRemaining])
 
   const handleInvalidSession = useCallback(() => {
@@ -410,7 +460,7 @@ function App() {
   }, [])
 
   if (screen === 'paired' && authSession) {
-    return <TimelineApp authSession={authSession} onSessionInvalid={handleInvalidSession} />
+    return <TimelineApp authSession={authSession} onSessionInvalid={handleInvalidSession} onRebindPhone={() => void createRebindSession()} />
   }
 
   return (
@@ -421,6 +471,7 @@ function App() {
           <span className="status-dot" aria-hidden="true" />
           {screen === 'bootstrap' ? '等待手机绑定'
             : screen === 'pairing' ? '等待手机确认'
+            : screen === 'rebind' ? '等待手机重绑定'
             : screen === 'replaced' ? '浏览器已被替换'
               : screen === 'insecure' ? '需要 HTTPS'
                 : '安全连接'}
@@ -434,6 +485,14 @@ function App() {
         )}
         {screen === 'bootstrap' && bootstrapSession && (
           <BootstrapCard session={bootstrapSession} secondsRemaining={secondsRemaining} />
+        )}
+        {screen === 'rebind' && rebindSession && (
+          <RebindCard
+            session={rebindSession}
+            secondsRemaining={secondsRemaining}
+            onRefresh={() => void createRebindSession()}
+            onCancel={() => { setRetryRebind(false); setRebindSession(null); setScreen('paired') }}
+          />
         )}
         {(screen === 'expired' || screen === 'rejected' || screen === 'replaced' || screen === 'insecure' || screen === 'error') && (
           <RetryState
@@ -449,7 +508,7 @@ function App() {
                 : screen === 'replaced' ? 'Android Master 已授权另一台 Windows。重新配对会再次请求手机确认。'
                   : '生成新的二维码后，再用 Android Master 扫描确认。'
             }
-            onRetry={() => void (retryBootstrap ? createBootstrapSession() : createSession())}
+            onRetry={() => void (retryBootstrap ? createBootstrapSession() : retryRebind ? createRebindSession() : createSession())}
             retryAfterSeconds={screen === 'error' ? retryAfterSeconds : 0}
             retryAllowed={screen !== 'insecure'}
           />
@@ -464,7 +523,7 @@ function App() {
   )
 }
 
-function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSession, onSessionInvalid: () => void }) {
+function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSession: AuthSession, onSessionInvalid: () => void, onRebindPhone: () => void }) {
   const [lanOpen, setLanOpen] = useState(false)
   const [messages, setMessages] = useState<TimelineMessage[]>([])
   const [nextBefore, setNextBefore] = useState('')
@@ -1019,6 +1078,7 @@ function TimelineApp({ authSession, onSessionInvalid }: { authSession: AuthSessi
           </div>
         </div>
         <div className="timeline-actions">
+          <button className="batch-action" type="button" onClick={onRebindPhone}>重新绑定手机</button>
           <button className="batch-action lan-mode-command" type="button" onClick={() => setLanOpen(true)}>
             <LanTransferIcon /><span>局域网快传</span>
           </button>
@@ -1528,6 +1588,42 @@ function BootstrapCard({ session, secondsRemaining }: { session: BootstrapSessio
       </div>
       <div className="qr-card">
         <div className="qr-frame" aria-label="Android 绑定二维码">
+          <QRCodeSVG value={session.qr_payload} size={232} level="M" marginSize={2} bgColor="#ffffff" fgColor="#14171c" />
+        </div>
+        <div className="expiry" aria-live="polite">
+          <span className="expiry-line"><span style={{ width: `${Math.min(100, secondsRemaining / 1.2)}%` }} /></span>
+          <span>{secondsRemaining} 秒后失效</span>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function RebindCard({
+  session,
+  secondsRemaining,
+  onRefresh,
+  onCancel,
+}: {
+  session: RebindSession
+  secondsRemaining: number
+  onRefresh: () => void
+  onCancel: () => void
+}) {
+  return (
+    <section className="pairing-layout" aria-labelledby="rebind-title">
+      <div className="pairing-copy">
+        <p className="eyebrow">ANDROID REBIND</p>
+        <h1 id="rebind-title">重新绑定手机</h1>
+        <p className="lead">用新安装的传输助手扫描二维码并确认服务器指纹。完成后，旧手机会立即断开。</p>
+        <div className="privacy-note">二维码为单次短时凭据，不包含长期 Master Token。</div>
+        <div className="button-row">
+          <button className="secondary-button" type="button" onClick={onRefresh}>刷新二维码</button>
+          <button className="secondary-button" type="button" onClick={onCancel}>取消</button>
+        </div>
+      </div>
+      <div className="qr-card">
+        <div className="qr-frame" aria-label="Android 重绑定二维码">
           <QRCodeSVG value={session.qr_payload} size={232} level="M" marginSize={2} bgColor="#ffffff" fgColor="#14171c" />
         </div>
         <div className="expiry" aria-live="polite">

@@ -91,6 +91,11 @@ h1 { margin: 0; font-size: clamp(42px, 6vw, 68px); line-height: 1.02; letter-spa
 .primary-button:hover { background: #204fc8; }
 .primary-button:disabled { color: var(--text-secondary); background: var(--surface-muted); cursor: wait; box-shadow: none; }
 .primary-button:focus-visible { outline: 3px solid rgba(40, 89, 217, .28); outline-offset: 3px; }
+.secondary-button { margin-top: 24px; min-height: 48px; padding: 0 20px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; font-weight: 700; }
+.secondary-button:hover { background: var(--surface-muted); }
+.secondary-button:focus-visible { outline: 3px solid rgba(40, 89, 217, .28); outline-offset: 3px; }
+.button-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.button-row .secondary-button { margin-top: 24px; }
 
 footer { min-height: 68px; display: flex; align-items: center; justify-content: space-between; gap: 20px; color: var(--text-secondary); border-top: 1px solid var(--border); font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
 

@@ -82,7 +82,15 @@ func NewComplete(
 	pairingService pairingService, bootstrapService bootstrapService, messageService messageService, fileService fileService,
 	instances instanceService, publicURL string, lanBroker *lantransfer.Broker, hub *realtime.Hub, webHandler http.Handler, logger *slog.Logger,
 ) http.Handler {
-	return newHandlerComplete(db, setupService, authService, pairingService, bootstrapService, messageService, fileService, instances, publicURL, lanBroker, hub, webHandler, logger)
+	return newHandlerComplete(db, setupService, authService, pairingService, bootstrapService, nil, messageService, fileService, instances, publicURL, lanBroker, hub, webHandler, logger)
+}
+
+func NewCompleteWithRebind(
+	db databasePinger, setupService setupService, authService deviceAuthenticator,
+	pairingService pairingService, bootstrapService bootstrapService, rebindService rebindService, messageService messageService, fileService fileService,
+	instances instanceService, publicURL string, lanBroker *lantransfer.Broker, hub *realtime.Hub, webHandler http.Handler, logger *slog.Logger,
+) http.Handler {
+	return newHandlerComplete(db, setupService, authService, pairingService, bootstrapService, rebindService, messageService, fileService, instances, publicURL, lanBroker, hub, webHandler, logger)
 }
 
 func newHandler(
@@ -104,12 +112,12 @@ func newHandlerWithInstance(
 	pairingService pairingService, messageService messageService, fileService fileService,
 	instances instanceService, publicURL string, hub *realtime.Hub, webHandler http.Handler, logger *slog.Logger,
 ) http.Handler {
-	return newHandlerComplete(db, setupService, authService, pairingService, nil, messageService, fileService, instances, publicURL, nil, hub, webHandler, logger)
+	return newHandlerComplete(db, setupService, authService, pairingService, nil, nil, messageService, fileService, instances, publicURL, nil, hub, webHandler, logger)
 }
 
 func newHandlerComplete(
 	db databasePinger, setupService setupService, authService deviceAuthenticator,
-	pairingService pairingService, bootstrapService bootstrapService, messageService messageService, fileService fileService,
+	pairingService pairingService, bootstrapService bootstrapService, rebindService rebindService, messageService messageService, fileService fileService,
 	instances instanceService, publicURL string, lanBroker *lantransfer.Broker, hub *realtime.Hub, webHandler http.Handler, logger *slog.Logger,
 ) http.Handler {
 	mux := http.NewServeMux()
@@ -118,10 +126,17 @@ func newHandlerComplete(
 	pairingActionLimiter := newAttemptLimiter(15, 2*time.Minute)
 	bootstrapCreateLimiter := newAttemptLimiter(10, 2*time.Minute)
 	bootstrapClaimLimiter := newAttemptLimiter(5, 5*time.Minute)
+	rebindCreateLimiter := newAttemptLimiter(10, 2*time.Minute)
+	rebindClaimLimiter := newAttemptLimiter(5, 5*time.Minute)
 	mux.HandleFunc("GET /healthz", healthz(db))
 	mux.HandleFunc("GET /api/v1/setup/status", setupStatus(setupService, logger))
 	if instances != nil {
 		mux.HandleFunc("GET /api/v1/instance/info", instanceInfo(instances, setupService, publicURL, logger))
+	}
+	if rebindService != nil && instances != nil {
+		mux.HandleFunc("POST /api/v1/rebind/sessions", limitBootstrap(rebindCreateLimiter, createRebindSession(authService, rebindService, instances, publicURL, logger)))
+		mux.HandleFunc("POST /api/v1/rebind/claim", limitBootstrap(rebindClaimLimiter, claimRebind(rebindService, logger)))
+		mux.HandleFunc("GET /api/v1/rebind/sessions/{id}/status", rebindStatus(authService, rebindService, logger))
 	}
 	if bootstrapService != nil && instances != nil {
 		mux.HandleFunc("POST /api/v1/bootstrap/sessions", limitBootstrap(bootstrapCreateLimiter, createBootstrapSession(bootstrapService, instances, publicURL, logger)))
