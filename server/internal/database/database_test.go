@@ -1,6 +1,7 @@
 package database
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -59,7 +60,38 @@ func TestOpenIsIdempotent(t *testing.T) {
 	if err := db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&applied); err != nil {
 		t.Fatalf("query schema_migrations: %v", err)
 	}
-	if applied != 8 {
-		t.Fatalf("migration count = %d, want 8", applied)
+	if applied != 9 {
+		t.Fatalf("migration count = %d, want 9", applied)
+	}
+}
+
+func TestOpenRepairsInstanceTableWhenVersionSevenIsAlreadyOccupied(t *testing.T) {
+	dataDir := t.TempDir()
+	databaseDir := filepath.Join(dataDir, "database")
+	if err := os.MkdirAll(databaseDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", filepath.Join(databaseDir, databaseFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = raw.Exec(createMigrationsTable); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = raw.Exec(`INSERT INTO schema_migrations(version, name) VALUES (7, '007_direct_transfers.sql')`); err != nil {
+		t.Fatal(err)
+	}
+	if err = raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := Open(dataDir)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer db.Close()
+	var table string
+	if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='server_instance'`).Scan(&table); err != nil {
+		t.Fatalf("server_instance table was not repaired: %v", err)
 	}
 }
