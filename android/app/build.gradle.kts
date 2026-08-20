@@ -14,8 +14,8 @@ android {
         applicationId = "com.transdot.transferassistant"
         minSdk = 23
         targetSdk = 36
-        versionCode = 7
-        versionName = "1.0.3"
+        versionCode = 8
+        versionName = "1.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
