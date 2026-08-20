@@ -252,7 +252,7 @@ export function LanTransferPanel({
                     <strong>{Math.round(item.progress * 100)}%</strong>
                     <span>{formatSpeed(item.speedBytesPerSecond)}</span>
                   </div>
-                  {item.status === 'failed' || item.status === 'cancelled' ? (
+                  {item.direction === 'sending' && (item.status === 'failed' || item.status === 'cancelled') ? (
                     <button className="icon-button" type="button" onClick={() => onRetry(item.id)} aria-label={`重试 ${item.name}`} title="重试">
                       <RetryIcon />
                     </button>

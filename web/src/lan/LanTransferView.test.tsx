@@ -71,6 +71,20 @@ describe('LanTransferView interactions', () => {
     const props = baseProps({ selectionError: '一次最多选择 20 个文件。' } as Partial<LanTransferPanelProps> & { selectionError: string })
     expect(renderToStaticMarkup(LanTransferPanel(props))).toContain('一次最多选择 20 个文件。')
   })
+
+  it('does not offer retry for a failed incoming file', () => {
+    const panel = LanTransferPanel(baseProps({
+      peerState: {
+        status: 'connected',
+        items: [{
+          id: 'incoming-1', name: 'incoming.txt', size: 3, direction: 'receiving', status: 'failed',
+          transferredBytes: 1, progress: 1 / 3, speedBytesPerSecond: 0, error: 'LAN_PEER_OFFLINE',
+        }],
+      },
+    }))
+    expect(elements(panel).some((element) => element.type === 'button'
+      && (element.props as { 'aria-label'?: string })['aria-label'] === '重试 incoming.txt')).toBe(false)
+  })
 })
 
 function baseProps(overrides: Partial<LanTransferPanelProps> = {}): LanTransferPanelProps {

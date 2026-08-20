@@ -4,6 +4,7 @@ import {
   HIGH_WATER_BYTES,
   LAN_CHUNK_BYTES,
   LOW_WATER_BYTES,
+  MAX_LAN_FILES,
   encodeControl,
   parseControl,
   sanitizeFilename,
@@ -88,10 +89,13 @@ type SendRecord = LanTransferItem & { file: File, startedAt: number }
 type ReceiveRecord = {
   offer: FileOffer
   name: string
+  directory: DirectoryHandle
   writable: WritableLike
   hash: ReturnType<typeof sha256.create>
   receivedBytes: number
   startedAt: number
+  active: boolean
+  cleanup?: Promise<void>
 }
 
 const defaultDependencies: LanPeerDependencies = {
@@ -116,6 +120,7 @@ export class LanPeer {
   private receivedNames = new Set<string>()
   private receiveChain = Promise.resolve()
   private transferGeneration = 0
+  private incomingOfferCount = 0
 
   constructor(
     private readonly signaling: SignalTransport,
@@ -165,7 +170,12 @@ export class LanPeer {
   }
 
   cancelTransfer() {
-    if (!this.current || !this.channel || this.channel.readyState !== 'open') return false
+    if (!this.channel || this.channel.readyState !== 'open') return false
+    if (this.incoming) {
+      void this.cancelIncomingByUser()
+      return true
+    }
+    if (!this.current) return false
     const cancelled = this.current
     this.transferGeneration += 1
     this.sendControl({ type: 'transfer_cancel', file_id: cancelled.id })
@@ -180,14 +190,18 @@ export class LanPeer {
   close() {
     if (this.state.status === 'closed') return
     this.transferGeneration += 1
+    const incoming = this.incoming
+    this.incoming = undefined
     this.clearConnection()
     this.unsubscribe()
     this.signaling.close?.()
     this.setState({ ...this.state, status: 'closed', currentFileId: undefined, error: undefined })
+    if (incoming) void this.cleanupIncomingRecord(incoming)
   }
 
   private async handleSignal(event: LanSignalEvent) {
     if (event.type === 'lan.peer_online') {
+      this.incomingOfferCount = 0
       await this.connect()
       return
     }
@@ -202,12 +216,11 @@ export class LanPeer {
       return
     }
     if (event.type === 'lan.waiting' || event.type === 'lan.peer_offline' || event.type === 'lan.cancelled') {
-      this.transferGeneration += 1
-      this.clearConnection()
-      this.setState({ ...this.state, status: 'waiting', currentFileId: undefined, error: undefined })
+      this.incomingOfferCount = 0
+      await this.terminateActiveTransfers('LAN_PEER_OFFLINE', 'waiting')
       return
     }
-    if (event.type === 'lan.error') this.fail(dataString(event.data, 'code') || 'LAN_SIGNAL_ERROR')
+    if (event.type === 'lan.error') await this.fail(dataString(event.data, 'code') || 'LAN_SIGNAL_ERROR')
   }
 
   private async connect() {
@@ -226,13 +239,13 @@ export class LanPeer {
       this.setState({ ...this.state, status: 'connected', error: undefined })
       this.startNext()
     }
-    channel.onclose = () => { if (this.state.status !== 'closed' && this.state.status !== 'failed' && this.connection) this.fail('LAN_PEER_OFFLINE') }
-    channel.onerror = () => this.fail('LAN_DATA_CHANNEL_ERROR')
+    channel.onclose = () => { if (this.state.status !== 'closed' && this.state.status !== 'failed' && this.connection) void this.fail('LAN_PEER_OFFLINE') }
+    channel.onerror = () => { void this.fail('LAN_DATA_CHANNEL_ERROR') }
     channel.onmessage = (event) => {
       this.receiveChain = this.receiveChain.then(() => this.receiveData(event.data)).catch(() => this.fail('LAN_PROTOCOL_ERROR'))
     }
     connection.onconnectionstatechange = () => {
-      if (connection.connectionState === 'failed' || connection.connectionState === 'disconnected') this.fail('LAN_PEER_OFFLINE')
+      if (connection.connectionState === 'failed' || connection.connectionState === 'disconnected') void this.fail('LAN_PEER_OFFLINE')
     }
     connection.onicecandidate = (event) => {
       if (event.candidate && isHostCandidate(event.candidate.candidate)) this.signaling.sendICE(event.candidate.candidate)
@@ -240,15 +253,15 @@ export class LanPeer {
     this.timeout = this.dependencies.setTimeout(() => {
       if (this.state.status === 'connecting') {
         this.signaling.cancel()
-        this.fail('LAN_CONNECT_TIMEOUT')
+        void this.fail('LAN_CONNECT_TIMEOUT')
       }
     }, 8_000)
     try {
       const offer = await connection.createOffer()
       await connection.setLocalDescription(offer)
-      if (!offer.sdp || !this.signaling.sendOffer(offer.sdp)) this.fail('LAN_SIGNAL_DISCONNECTED')
+      if (!offer.sdp || !this.signaling.sendOffer(offer.sdp)) void this.fail('LAN_SIGNAL_DISCONNECTED')
     } catch {
-      this.fail('LAN_NEGOTIATION_FAILED')
+      void this.fail('LAN_NEGOTIATION_FAILED')
     }
   }
 
@@ -274,27 +287,35 @@ export class LanPeer {
 
   private async sendCurrent(record: SendRecord) {
     const generation = ++this.transferGeneration
+    const channel = this.channel
+    if (!channel || channel.readyState !== 'open') return
     const hash = sha256.create()
     for (let offset = 0; offset < record.file.size; offset += LAN_CHUNK_BYTES) {
-      if (generation !== this.transferGeneration || this.current !== record) return
-      await this.waitForWritableChannel()
+      if (!this.isActiveSend(record, generation, channel)) return
+      await this.waitForWritableChannel(channel)
+      if (!this.isActiveSend(record, generation, channel)) return
       const chunk = new Uint8Array(await record.file.slice(offset, Math.min(record.file.size, offset + LAN_CHUNK_BYTES)).arrayBuffer())
+      if (!this.isActiveSend(record, generation, channel)) return
       hash.update(chunk)
-      this.channel?.send(toArrayBuffer(chunk))
+      channel.send(toArrayBuffer(chunk))
       record.transferredBytes += chunk.byteLength
       record.progress = record.size === 0 ? 1 : record.transferredBytes / record.size
       record.speedBytesPerSecond = transferSpeed(record.transferredBytes, record.startedAt, this.dependencies.now())
       this.publishItems()
     }
-    if (generation !== this.transferGeneration || this.current !== record) return
+    if (!this.isActiveSend(record, generation, channel)) return
     record.progress = record.size === 0 ? 1 : record.progress
-    this.sendControl({ type: 'file_complete', file_id: record.id, sha256: bytesToHex(hash.digest()) })
+    channel.send(encodeControl({ type: 'file_complete', file_id: record.id, sha256: bytesToHex(hash.digest()) }))
     this.publishItems()
   }
 
-  private waitForWritableChannel() {
-    const channel = this.channel
-    if (!channel || channel.readyState !== 'open') return Promise.reject(new Error('LAN_PEER_OFFLINE'))
+  private isActiveSend(record: SendRecord, generation: number, channel: DataChannelLike) {
+    return generation === this.transferGeneration && this.current === record
+      && this.channel === channel && channel.readyState === 'open'
+  }
+
+  private waitForWritableChannel(channel: DataChannelLike) {
+    if (channel.readyState !== 'open') return Promise.reject(new Error('LAN_PEER_OFFLINE'))
     if (channel.bufferedAmount < BUFFERED_AMOUNT_HIGH) return Promise.resolve()
     channel.bufferedAmountLowThreshold = BUFFERED_AMOUNT_LOW
     return new Promise<void>((resolve, reject) => {
@@ -340,27 +361,53 @@ export class LanPeer {
       return
     }
     if (frame.type === 'file_offer') {
+      if (this.incomingOfferCount >= MAX_LAN_FILES) {
+        this.sendControl({ type: 'file_reject', file_id: frame.file_id, code: 'TOO_MANY_FILES' })
+        return
+      }
+      this.incomingOfferCount += 1
       await this.acceptIncoming(frame)
+      return
+    }
+    if (frame.type === 'queue_complete') {
+      this.incomingOfferCount = 0
       return
     }
     if (frame.type === 'file_complete') {
       await this.completeIncoming(frame.file_id, frame.sha256)
       return
     }
-    if (frame.type === 'transfer_cancel' && this.incoming?.offer.file_id === frame.file_id) await this.cancelIncoming('TRANSFER_CANCELLED')
+    if (frame.type === 'transfer_cancel' && this.incoming?.offer.file_id === frame.file_id) {
+      await this.cancelIncoming('TRANSFER_CANCELLED', false)
+    }
   }
 
   private async acceptIncoming(offer: FileOffer) {
-    if (!this.receiveDirectory || !this.receiveDirectory.getFileHandle || this.current || this.incoming) {
+    const directory = this.receiveDirectory
+    const channel = this.channel
+    if (!directory?.getFileHandle || !channel || channel.readyState !== 'open' || this.current || this.incoming) {
       this.sendControl({ type: 'file_reject', file_id: offer.file_id, code: 'DESTINATION_UNAVAILABLE' })
       return
     }
     try {
-      const name = await availableName(this.receiveDirectory, sanitizeFilename(offer.name), this.receivedNames)
-      const handle = await this.receiveDirectory.getFileHandle(name, { create: true }) as FileHandleLike
+      const name = await availableName(directory, sanitizeFilename(offer.name), this.receivedNames)
+      if (!this.isActiveReceiveSetup(channel, directory)) return
+      const handle = await directory.getFileHandle(name, { create: true }) as FileHandleLike
+      if (!this.isActiveReceiveSetup(channel, directory)) {
+        try { await directory.removeEntry?.(name) } catch { /* Best-effort partial cleanup. */ }
+        return
+      }
       const writable = await handle.createWritable()
+      const incoming: ReceiveRecord = {
+        offer, name, directory, writable, hash: sha256.create(),
+        receivedBytes: 0, startedAt: this.dependencies.now(), active: true,
+      }
+      if (!this.isActiveReceiveSetup(channel, directory)) {
+        await this.cleanupIncomingRecord(incoming)
+        return
+      }
       this.receivedNames.add(name)
-      this.incoming = { offer, name, writable, hash: sha256.create(), receivedBytes: 0, startedAt: this.dependencies.now() }
+      this.incoming = incoming
       this.setState({
         ...this.state,
         status: 'transferring',
@@ -369,14 +416,21 @@ export class LanPeer {
       })
       this.sendControl({ type: 'file_accept', file_id: offer.file_id })
     } catch {
-      this.sendControl({ type: 'file_reject', file_id: offer.file_id, code: 'DESTINATION_UNAVAILABLE' })
+      if (this.isActiveReceiveSetup(channel, directory)) {
+        channel.send(encodeControl({ type: 'file_reject', file_id: offer.file_id, code: 'DESTINATION_UNAVAILABLE' }))
+      }
     }
+  }
+
+  private isActiveReceiveSetup(channel: DataChannelLike, directory: DirectoryHandle) {
+    return this.channel === channel && channel.readyState === 'open' && this.receiveDirectory === directory
   }
 
   private async receiveChunk(chunk: Uint8Array) {
     const incoming = this.incoming
     if (!incoming || incoming.receivedBytes + chunk.byteLength > incoming.offer.size) throw new Error('LAN_PROTOCOL_ERROR')
     await incoming.writable.write(chunk)
+    if (!incoming.active || this.incoming !== incoming) return
     incoming.hash.update(chunk)
     incoming.receivedBytes += chunk.byteLength
     this.updateIncoming(incoming)
@@ -387,10 +441,11 @@ export class LanPeer {
     if (!incoming || incoming.offer.file_id !== fileId) throw new Error('LAN_PROTOCOL_ERROR')
     const actualHash = bytesToHex(incoming.hash.digest())
     if (incoming.receivedBytes !== incoming.offer.size || actualHash !== expectedHash) {
-      await this.cancelIncoming(actualHash !== expectedHash ? 'HASH_MISMATCH' : 'SIZE_MISMATCH')
+      await this.cancelIncoming(actualHash !== expectedHash ? 'HASH_MISMATCH' : 'SIZE_MISMATCH', true)
       return
     }
     await incoming.writable.close()
+    if (!incoming.active || this.incoming !== incoming) return
     this.patchItem(fileId, { status: 'completed', progress: 1, transferredBytes: incoming.offer.size })
     this.incoming = undefined
     this.sendControl({ type: 'file_verified', file_id: fileId })
@@ -398,15 +453,21 @@ export class LanPeer {
     this.startNext()
   }
 
-  private async cancelIncoming(code: string) {
+  private async cancelIncomingByUser() {
     const incoming = this.incoming
     if (!incoming) return
-    try { await incoming.writable.abort?.() } catch { /* Best-effort partial cleanup. */ }
-    try { await this.receiveDirectory?.removeEntry?.(incoming.name) } catch { /* Best-effort partial cleanup. */ }
-    this.patchItem(incoming.offer.file_id, { status: code === 'TRANSFER_CANCELLED' ? 'cancelled' : 'failed', error: code })
-    this.sendControl({ type: 'file_failed', file_id: incoming.offer.file_id, code })
+    this.sendControl({ type: 'transfer_cancel', file_id: incoming.offer.file_id })
+    await this.cancelIncoming('TRANSFER_CANCELLED', false)
+  }
+
+  private async cancelIncoming(code: string, notifyFailure: boolean) {
+    const incoming = this.incoming
+    if (!incoming) return
     this.incoming = undefined
+    this.patchItem(incoming.offer.file_id, { status: code === 'TRANSFER_CANCELLED' ? 'cancelled' : 'failed', error: code })
+    if (notifyFailure) this.sendControl({ type: 'file_failed', file_id: incoming.offer.file_id, code })
     this.setState({ ...this.state, status: 'connected', currentFileId: undefined })
+    await this.cleanupIncomingRecord(incoming)
     this.startNext()
   }
 
@@ -453,16 +514,42 @@ export class LanPeer {
     })
   }
 
-  private fail(error: string) {
+  private async fail(error: string) {
     if (this.state.status === 'failed' || this.state.status === 'closed') return
+    await this.terminateActiveTransfers(error, 'failed')
+  }
+
+  private async terminateActiveTransfers(error: string, status: 'waiting' | 'failed') {
+    this.transferGeneration += 1
     if (this.current) {
       this.current.status = 'failed'
       this.current.error = error
       this.current = undefined
     }
-    this.transferGeneration += 1
+    const incoming = this.incoming
+    this.incoming = undefined
+    const receivingItems = this.state.items
+      .filter((item) => item.direction === 'receiving')
+      .map((item) => incoming && item.id === incoming.offer.file_id ? { ...item, status: 'failed' as const, error } : item)
     this.clearConnection()
-    this.setState({ ...this.state, status: 'failed', currentFileId: undefined, error })
+    this.setState({
+      status,
+      items: this.queue.map(({ file: _file, startedAt: _startedAt, ...item }) => ({ ...item })).concat(receivingItems),
+      currentFileId: undefined,
+      ...(status === 'failed' ? { error } : {}),
+    })
+    if (incoming) await this.cleanupIncomingRecord(incoming)
+  }
+
+  private cleanupIncomingRecord(incoming: ReceiveRecord) {
+    incoming.active = false
+    if (!incoming.cleanup) {
+      incoming.cleanup = (async () => {
+        try { await incoming.writable.abort?.() } catch { /* Best-effort partial cleanup. */ }
+        try { await incoming.directory.removeEntry?.(incoming.name) } catch { /* Best-effort partial cleanup. */ }
+      })()
+    }
+    return incoming.cleanup
   }
 
   private clearConnectTimeout() {
