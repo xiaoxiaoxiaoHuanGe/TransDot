@@ -198,9 +198,23 @@ func validSDP(raw json.RawMessage) bool {
 }
 func candidateValue(raw json.RawMessage) (string, bool) {
 	var data struct {
-		Candidate string `json:"candidate"`
+		Candidate     string  `json:"candidate"`
+		SDPMid        *string `json:"sdp_mid"`
+		SDPMLineIndex *int    `json:"sdp_mline_index"`
 	}
-	return data.Candidate, json.Unmarshal(raw, &data) == nil && strings.TrimSpace(data.Candidate) != ""
+	if json.Unmarshal(raw, &data) != nil || strings.TrimSpace(data.Candidate) == "" {
+		return "", false
+	}
+	if data.SDPMLineIndex == nil {
+		return "", false
+	}
+	if data.SDPMid != nil && strings.TrimSpace(*data.SDPMid) == "" {
+		return "", false
+	}
+	if data.SDPMLineIndex != nil && *data.SDPMLineIndex < 0 {
+		return "", false
+	}
+	return data.Candidate, true
 }
 func isHostCandidate(candidate string) bool {
 	fields := strings.Fields(strings.ToLower(candidate))

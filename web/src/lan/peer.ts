@@ -11,7 +11,7 @@ import {
   uniqueFilename,
   validateQueue,
 } from './protocol'
-import { isHostCandidate, type LanSignalEvent } from './signaling'
+import { isHostCandidate, type LanIceCandidate, type LanSignalEvent } from './signaling'
 import type { DirectoryHandle, FileOffer, LanControlFrame } from './types'
 
 export const BUFFERED_AMOUNT_HIGH = HIGH_WATER_BYTES
@@ -20,7 +20,7 @@ export const BUFFERED_AMOUNT_LOW = LOW_WATER_BYTES
 export interface SignalTransport {
   subscribe(listener: (event: LanSignalEvent) => void): () => void
   sendOffer(sdp: string): boolean
-  sendICE(candidate: string): boolean
+  sendICE(candidate: LanIceCandidate): boolean
   markConnected(): boolean
   cancel(): boolean
   close?(): void
@@ -42,7 +42,7 @@ export interface DataChannelLike {
 
 export interface PeerConnectionLike {
   connectionState: string
-  onicecandidate: ((event: { candidate: { candidate: string } | null }) => void) | null
+  onicecandidate: ((event: { candidate: LanIceCandidate | null }) => void) | null
   onconnectionstatechange: (() => void) | null
   createDataChannel(label: string, options: RTCDataChannelInit): DataChannelLike
   createOffer(): Promise<RTCSessionDescriptionInit>
@@ -121,6 +121,9 @@ export class LanPeer {
   private receiveChain = Promise.resolve()
   private transferGeneration = 0
   private incomingOfferCount = 0
+  private remoteDescriptionSet = false
+  private pendingRemoteIce: LanIceCandidate[] = []
+  private activeSessionId = ''
 
   constructor(
     private readonly signaling: SignalTransport,
@@ -201,21 +204,48 @@ export class LanPeer {
 
   private async handleSignal(event: LanSignalEvent) {
     if (event.type === 'lan.peer_online') {
+      if (!event.sessionId || event.sessionId === this.activeSessionId) return
+      if (this.activeSessionId) await this.terminateActiveTransfers('LAN_PEER_OFFLINE', 'waiting')
+      this.activeSessionId = event.sessionId
       this.incomingOfferCount = 0
       await this.connect()
       return
     }
+    if (event.type !== 'lan.waiting' && event.sessionId !== this.activeSessionId) return
     if (event.type === 'lan.answer') {
       const sdp = dataString(event.data, 'sdp')
-      if (sdp && this.connection) await this.connection.setRemoteDescription({ type: 'answer', sdp })
+      const connection = this.connection
+      if (sdp && connection) {
+        try {
+          await connection.setRemoteDescription({ type: 'answer', sdp })
+          if (connection !== this.connection) return
+          this.remoteDescriptionSet = true
+          const pending = this.pendingRemoteIce.splice(0)
+          for (const candidate of pending) {
+            await connection.addIceCandidate(candidate)
+            if (connection !== this.connection) return
+          }
+        } catch {
+          if (connection === this.connection) await this.fail('LAN_NEGOTIATION_FAILED')
+        }
+      }
       return
     }
     if (event.type === 'lan.ice') {
-      const candidate = dataString(event.data, 'candidate')
-      if (candidate && isHostCandidate(candidate) && this.connection) await this.connection.addIceCandidate({ candidate })
+      const candidate = signalIceCandidate(event.data)
+      const connection = this.connection
+      if (candidate && isHostCandidate(candidate.candidate) && connection) {
+        if (!this.remoteDescriptionSet) this.pendingRemoteIce.push(candidate)
+        else {
+          try { await connection.addIceCandidate(candidate) } catch {
+            if (connection === this.connection) await this.fail('LAN_NEGOTIATION_FAILED')
+          }
+        }
+      }
       return
     }
     if (event.type === 'lan.waiting' || event.type === 'lan.peer_offline' || event.type === 'lan.cancelled') {
+      this.activeSessionId = ''
       this.incomingOfferCount = 0
       await this.terminateActiveTransfers('LAN_PEER_OFFLINE', 'waiting')
       return
@@ -245,10 +275,14 @@ export class LanPeer {
       this.receiveChain = this.receiveChain.then(() => this.receiveData(event.data)).catch(() => this.fail('LAN_PROTOCOL_ERROR'))
     }
     connection.onconnectionstatechange = () => {
-      if (connection.connectionState === 'failed' || connection.connectionState === 'disconnected') void this.fail('LAN_PEER_OFFLINE')
+      if (connection === this.connection && (connection.connectionState === 'failed' || connection.connectionState === 'disconnected')) {
+        void this.fail('LAN_PEER_OFFLINE')
+      }
     }
     connection.onicecandidate = (event) => {
-      if (event.candidate && isHostCandidate(event.candidate.candidate)) this.signaling.sendICE(event.candidate.candidate)
+      if (connection === this.connection && event.candidate && isHostCandidate(event.candidate.candidate)) {
+        this.signaling.sendICE(event.candidate)
+      }
     }
     this.timeout = this.dependencies.setTimeout(() => {
       if (this.state.status === 'connecting') {
@@ -258,10 +292,12 @@ export class LanPeer {
     }, 8_000)
     try {
       const offer = await connection.createOffer()
+      if (connection !== this.connection) return
       await connection.setLocalDescription(offer)
+      if (connection !== this.connection) return
       if (!offer.sdp || !this.signaling.sendOffer(offer.sdp)) void this.fail('LAN_SIGNAL_DISCONNECTED')
     } catch {
-      void this.fail('LAN_NEGOTIATION_FAILED')
+      if (connection === this.connection) void this.fail('LAN_NEGOTIATION_FAILED')
     }
   }
 
@@ -563,6 +599,12 @@ export class LanPeer {
     const connection = this.connection
     this.channel = undefined
     this.connection = undefined
+    this.remoteDescriptionSet = false
+    this.pendingRemoteIce = []
+    if (connection) {
+      connection.onicecandidate = null
+      connection.onconnectionstatechange = null
+    }
     if (channel) {
       channel.onopen = null
       channel.onclose = null
@@ -584,6 +626,15 @@ function dataString(data: unknown, key: string) {
   if (!data || typeof data !== 'object') return ''
   const value = (data as Record<string, unknown>)[key]
   return typeof value === 'string' ? value : ''
+}
+
+function signalIceCandidate(data: unknown): LanIceCandidate | undefined {
+  if (!data || typeof data !== 'object') return undefined
+  const value = data as Partial<LanIceCandidate>
+  if (typeof value.candidate !== 'string') return undefined
+  if (value.sdpMid !== null && typeof value.sdpMid !== 'string') return undefined
+  if (!Number.isInteger(value.sdpMLineIndex) || value.sdpMLineIndex! < 0) return undefined
+  return { candidate: value.candidate, sdpMid: value.sdpMid!, sdpMLineIndex: value.sdpMLineIndex! }
 }
 
 function toArrayBuffer(chunk: Uint8Array) {

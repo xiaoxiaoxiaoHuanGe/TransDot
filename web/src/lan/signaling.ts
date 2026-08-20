@@ -25,6 +25,12 @@ export type LanSignalEvent = {
   data?: unknown
 }
 
+export type LanIceCandidate = {
+  candidate: string
+  sdpMid: string | null
+  sdpMLineIndex: number | null
+}
+
 type Listener = (event: LanSignalEvent) => void
 type LocationLike = Pick<Location, 'protocol' | 'host'>
 
@@ -62,9 +68,13 @@ export class LanSignalingClient {
   markConnected() { return this.send('lan.connected') }
   cancel() { return this.send('lan.cancel') }
 
-  sendICE(candidate: string) {
-    if (!isHostCandidate(candidate)) return false
-    return this.send('lan.ice', { candidate })
+  sendICE(ice: LanIceCandidate) {
+    if (!isHostCandidate(ice.candidate) || ice.sdpMLineIndex === null) return false
+    return this.send('lan.ice', {
+      candidate: ice.candidate,
+      sdp_mid: ice.sdpMid,
+      sdp_mline_index: ice.sdpMLineIndex,
+    })
   }
 
   close() {
@@ -119,14 +129,30 @@ export class LanSignalingClient {
     if (event.type === 'lan.peer_online' && sessionId) this.sessionId = sessionId
     const data = payload.data ?? (payload.code ? { code: payload.code } : undefined)
     if (event.type === 'lan.ice') {
-      const candidate = data && typeof data === 'object' ? (data as { candidate?: unknown }).candidate : undefined
-      if (typeof candidate !== 'string' || !isHostCandidate(candidate)) return
+      const ice = parseIceCandidate(data)
+      if (!ice || !isHostCandidate(ice.candidate)) return
+      this.emit({ type: event.type as LanSignalType, sessionId, data: ice })
+      return
     }
-    if (event.type === 'lan.peer_offline' || event.type === 'lan.cancelled') this.sessionId = ''
+    if ((event.type === 'lan.peer_offline' || event.type === 'lan.cancelled') && sessionId === this.sessionId) {
+      this.sessionId = ''
+    }
     this.emit({ type: event.type as LanSignalType, sessionId, data })
   }
 
   private emit(event: LanSignalEvent) { for (const listener of this.listeners) listener(event) }
+}
+
+function parseIceCandidate(data: unknown): LanIceCandidate | undefined {
+  if (!data || typeof data !== 'object') return undefined
+  const value = data as Record<string, unknown>
+  const candidate = value.candidate
+  const sdpMid = value.sdp_mid
+  const sdpMLineIndex = value.sdp_mline_index
+  if (typeof candidate !== 'string') return undefined
+  if (sdpMid !== null && typeof sdpMid !== 'string') return undefined
+  if (!Number.isInteger(sdpMLineIndex) || (sdpMLineIndex as number) < 0) return undefined
+  return { candidate, sdpMid, sdpMLineIndex: sdpMLineIndex as number | null }
 }
 
 export function isHostCandidate(candidate: string) {

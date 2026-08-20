@@ -53,7 +53,7 @@ func TestBrokerRejectsNonHostCandidate(t *testing.T) {
 	broker, sessionID := readyBroker(t)
 	_, err := broker.Handle(Device{ID: "android", Type: AndroidMaster}, ClientSignal{
 		Type: SignalICE, SessionID: sessionID,
-		Data: json.RawMessage(`{"candidate":"candidate:1 1 UDP 1 203.0.113.2 5000 typ srflx"}`),
+		Data: json.RawMessage(`{"candidate":"candidate:1 1 UDP 1 203.0.113.2 5000 typ srflx","sdp_mid":"0","sdp_mline_index":0}`),
 	}, testStart.Add(2*time.Second))
 	if !errors.Is(err, ErrNonHostCandidate) {
 		t.Fatalf("error = %v", err)
@@ -61,10 +61,29 @@ func TestBrokerRejectsNonHostCandidate(t *testing.T) {
 
 	deliveries, err := broker.Handle(Device{ID: "android", Type: AndroidMaster}, ClientSignal{
 		Type: SignalICE, SessionID: sessionID,
-		Data: json.RawMessage(`{"candidate":"candidate:2 1 UDP 1 host.local 5001 typ host"}`),
+		Data: json.RawMessage(`{"candidate":"candidate:2 1 UDP 1 host.local 5001 typ host","sdp_mid":"0","sdp_mline_index":0}`),
 	}, testStart.Add(3*time.Second))
 	if err != nil || len(deliveries) != 1 || deliveries[0].DeviceID != "browser" {
 		t.Fatalf("host candidate result = %#v, %v", deliveries, err)
+	}
+	if string(deliveries[0].Signal.Data.(json.RawMessage)) != `{"candidate":"candidate:2 1 UDP 1 host.local 5001 typ host","sdp_mid":"0","sdp_mline_index":0}` {
+		t.Fatalf("ICE metadata changed: %s", deliveries[0].Signal.Data)
+	}
+
+	_, err = broker.Handle(Device{ID: "android", Type: AndroidMaster}, ClientSignal{
+		Type: SignalICE, SessionID: sessionID,
+		Data: json.RawMessage(`{"candidate":"candidate:2 1 UDP 1 host.local 5001 typ host"}`),
+	}, testStart.Add(4*time.Second))
+	if !errors.Is(err, ErrSignalInvalid) {
+		t.Fatalf("missing ICE metadata error = %v", err)
+	}
+
+	_, err = broker.Handle(Device{ID: "android", Type: AndroidMaster}, ClientSignal{
+		Type: SignalICE, SessionID: sessionID,
+		Data: json.RawMessage(`{"candidate":"candidate:2 1 UDP 1 host.local 5001 typ host","sdp_mid":"0","sdp_mline_index":null}`),
+	}, testStart.Add(5*time.Second))
+	if !errors.Is(err, ErrSignalInvalid) {
+		t.Fatalf("missing ICE m-line index error = %v", err)
 	}
 }
 

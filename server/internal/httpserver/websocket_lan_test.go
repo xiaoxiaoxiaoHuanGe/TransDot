@@ -73,7 +73,7 @@ func TestWebsocketRelaysAuthenticatedLANSignals(t *testing.T) {
 
 	writeLANSignal(t, ctx, browser, lantransfer.ClientSignal{
 		Type: lantransfer.SignalICE, SessionID: androidSession,
-		Data: json.RawMessage(`{"candidate":"candidate:1 1 UDP 1 192.168.1.20 5000 typ host"}`),
+		Data: json.RawMessage(`{"candidate":"candidate:1 1 UDP 1 192.168.1.20 5000 typ host","sdp_mid":"0","sdp_mline_index":0}`),
 	})
 	iceEvent := readLANEvent(t, ctx, android, lantransfer.SignalICE)
 
@@ -83,7 +83,7 @@ func TestWebsocketRelaysAuthenticatedLANSignals(t *testing.T) {
 
 	writeLANSignal(t, ctx, android, lantransfer.ClientSignal{
 		Type: lantransfer.SignalICE, SessionID: androidSession,
-		Data: json.RawMessage(`{"candidate":"candidate:1 1 UDP 1 203.0.113.2 5000 typ srflx"}`),
+		Data: json.RawMessage(`{"candidate":"candidate:1 1 UDP 1 203.0.113.2 5000 typ srflx","sdp_mid":"0","sdp_mline_index":0}`),
 	})
 	errorEvent := readLANEvent(t, ctx, android, "lan.error")
 	errorData, _ := json.Marshal(errorEvent.Data)

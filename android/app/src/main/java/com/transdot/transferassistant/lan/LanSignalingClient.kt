@@ -16,6 +16,7 @@ import okhttp3.WebSocketListener
 import org.json.JSONObject
 
 data class LanSocketRequest(val url: String, val authorization: String)
+data class LanIceCandidate(val candidate: String, val sdpMid: String?, val sdpMLineIndex: Int)
 
 interface LanSocket { fun send(text: String): Boolean; fun close() }
 interface LanSocketListener { fun onOpen(); fun onMessage(text: String); fun onClosed(); fun onFailure(error: Throwable) }
@@ -25,7 +26,7 @@ sealed interface LanSignalEvent {
     data object Waiting : LanSignalEvent
     data class PeerOnline(val sessionId: String) : LanSignalEvent
     data class Offer(val sessionId: String, val sdp: String) : LanSignalEvent
-    data class Ice(val sessionId: String, val candidate: String) : LanSignalEvent
+    data class Ice(val sessionId: String, val ice: LanIceCandidate) : LanSignalEvent
     data class PeerOffline(val sessionId: String?) : LanSignalEvent
     data class Error(val code: String) : LanSignalEvent
 }
@@ -68,7 +69,14 @@ class LanSignalingClient(
     }
 
     override fun sendAnswer(sdp: String): Boolean = sendSession("lan.answer", JSONObject().put("sdp", sdp))
-    override fun sendIce(candidate: String): Boolean = isHostCandidate(candidate) && sendSession("lan.ice", JSONObject().put("candidate", candidate))
+    override fun sendIce(candidate: LanIceCandidate): Boolean {
+        if (!isHostCandidate(candidate.candidate) || candidate.sdpMLineIndex < 0) return false
+        val data = JSONObject()
+            .put("candidate", candidate.candidate)
+            .put("sdp_mid", candidate.sdpMid ?: JSONObject.NULL)
+            .put("sdp_mline_index", candidate.sdpMLineIndex)
+        return sendSession("lan.ice", data)
+    }
     override fun markConnected(): Boolean = sendSession("lan.connected", JSONObject())
     override fun restartSession(): Boolean {
         if (closed || socket == null) return false
@@ -100,7 +108,7 @@ class LanSignalingClient(
                 runCatching { parseEvent(text) }.onSuccess { event ->
                     if (event == null) return@onSuccess
                     if (event is LanSignalEvent.PeerOnline) sessionId = event.sessionId
-                    if (event is LanSignalEvent.PeerOffline) sessionId = null
+                    if (event is LanSignalEvent.PeerOffline && event.sessionId == sessionId) sessionId = null
                     mutableEvents.tryEmit(event)
                 }.onFailure { mutableEvents.tryEmit(LanSignalEvent.Error("LAN_SIGNAL_INVALID")) }
             }
@@ -155,7 +163,12 @@ private fun parseEvent(text: String): LanSignalEvent? {
     return when (type) {
         "lan.peer_online" -> LanSignalEvent.PeerOnline(requireNotNull(id))
         "lan.offer" -> LanSignalEvent.Offer(requireNotNull(id), data.getString("sdp"))
-        "lan.ice" -> LanSignalEvent.Ice(requireNotNull(id), data.getString("candidate"))
+        "lan.ice" -> {
+            val sdpMid = if (data.isNull("sdp_mid")) null else data.getString("sdp_mid")
+            val sdpMLineIndex = data.getInt("sdp_mline_index")
+            if (sdpMLineIndex < 0 || (sdpMid != null && sdpMid.isBlank())) throw IllegalArgumentException()
+            LanSignalEvent.Ice(requireNotNull(id), LanIceCandidate(data.getString("candidate"), sdpMid, sdpMLineIndex))
+        }
         "lan.peer_offline", "lan.cancelled" -> LanSignalEvent.PeerOffline(id)
         "lan.error" -> LanSignalEvent.Error(payload.getString("code"))
         else -> throw IllegalArgumentException()

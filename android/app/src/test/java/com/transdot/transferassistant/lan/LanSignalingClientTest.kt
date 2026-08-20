@@ -43,15 +43,44 @@ class LanSignalingClientTest {
         client.start(); transport.open()
         transport.message("""{"event_id":"e1","type":"lan.peer_online","timestamp":"2026-08-20T00:00:00Z","data":{"session_id":"s","data":{}}}""")
 
-        assertTrue(client.sendIce("candidate:1 1 UDP 1 phone.local 5000 typ host"))
-        assertFalse(client.sendIce("candidate:2 1 UDP 1 203.0.113.2 5001 typ srflx"))
+        val host = LanIceCandidate("candidate:1 1 UDP 1 phone.local 5000 typ host", "0", 0)
+        assertTrue(client.sendIce(host))
+        assertFalse(client.sendIce(LanIceCandidate("candidate:2 1 UDP 1 203.0.113.2 5001 typ srflx", "0", 0)))
         client.markConnected()
 
         val captured = transport.sent.joinToString("\n")
         assertFalse(captured.contains("filename", ignoreCase = true))
         assertFalse(captured.contains("sha256", ignoreCase = true))
         assertFalse(captured.contains("file_offer", ignoreCase = true))
+        val ice = org.json.JSONObject(transport.sent[1]).getJSONObject("data")
+        assertEquals("0", ice.getString("sdp_mid"))
+        assertEquals(0, ice.getInt("sdp_mline_index"))
         assertEquals(listOf("lan.ready", "lan.ice", "lan.connected"), transport.sentTypes())
+    }
+
+    @Test
+    fun parsesCompleteRemoteIceCandidate() = runTest {
+        val transport = FakeSocketTransport()
+        val client = LanSignalingClient(session(), transport, backgroundScope)
+        val events = mutableListOf<LanSignalEvent>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { client.events.toList(events) }
+        client.start(); transport.open()
+        transport.message("""{"event_id":"e1","type":"lan.peer_online","timestamp":"2026-08-20T00:00:00Z","data":{"session_id":"s","data":{}}}""")
+        transport.message("""{"event_id":"e2","type":"lan.ice","timestamp":"2026-08-20T00:00:00Z","data":{"session_id":"s","data":{"candidate":"candidate typ host","sdp_mid":"0","sdp_mline_index":0}}}""")
+
+        assertEquals(LanIceCandidate("candidate typ host", "0", 0), (events.last() as LanSignalEvent.Ice).ice)
+    }
+
+    @Test
+    fun staleOfflineDoesNotClearReplacementSession() = runTest {
+        val transport = FakeSocketTransport()
+        val client = LanSignalingClient(session(), transport, backgroundScope)
+        client.start(); transport.open()
+        transport.message("""{"event_id":"e1","type":"lan.peer_online","timestamp":"2026-08-20T00:00:00Z","data":{"session_id":"old","data":{}}}""")
+        transport.message("""{"event_id":"e2","type":"lan.peer_online","timestamp":"2026-08-20T00:00:00Z","data":{"session_id":"new","data":{}}}""")
+        transport.message("""{"event_id":"e3","type":"lan.peer_offline","timestamp":"2026-08-20T00:00:00Z","data":{"session_id":"old","data":{}}}""")
+
+        assertTrue(client.sendAnswer("current-answer"))
     }
 
     @Test

@@ -42,9 +42,16 @@ describe('LanSignalingClient', () => {
     const client = new LanSignalingClient('wss://example.test/ws', () => socket)
     socket.open()
     socket.receive({ event_id: 'e1', type: 'lan.peer_online', timestamp: '', data: { session_id: 's1' } })
-    expect(client.sendICE('candidate:1 1 UDP 1 host.local 5000 typ host')).toBe(true)
-    expect(client.sendICE('candidate:2 1 UDP 1 203.0.113.2 5001 typ srflx')).toBe(false)
+    expect(client.sendICE({
+      candidate: 'candidate:1 1 UDP 1 host.local 5000 typ host', sdpMid: '0', sdpMLineIndex: 0,
+    })).toBe(true)
+    expect(client.sendICE({
+      candidate: 'candidate:2 1 UDP 1 203.0.113.2 5001 typ srflx', sdpMid: '0', sdpMLineIndex: 0,
+    })).toBe(false)
     expect(socket.sent).toHaveLength(2)
+    expect(JSON.parse(socket.sent[1]).data).toEqual({
+      candidate: 'candidate:1 1 UDP 1 host.local 5000 typ host', sdp_mid: '0', sdp_mline_index: 0,
+    })
   })
 
   it('does not send an offer until the server creates a session', () => {
@@ -67,6 +74,17 @@ describe('LanSignalingClient', () => {
     expect(client.sendOffer('stale-offer')).toBe(false)
   })
 
+  it('does not let a stale offline event clear a replacement session', () => {
+    const socket = new FakeSocket()
+    const client = new LanSignalingClient('wss://example.test/ws', () => socket)
+    socket.open()
+    socket.receive({ event_id: 'e1', type: 'lan.peer_online', timestamp: '', data: { session_id: 'old' } })
+    socket.receive({ event_id: 'e2', type: 'lan.peer_online', timestamp: '', data: { session_id: 'new' } })
+    socket.receive({ event_id: 'e3', type: 'lan.peer_offline', timestamp: '', data: { session_id: 'old' } })
+    expect(client.sessionId).toBe('new')
+    expect(client.sendOffer('current-offer')).toBe(true)
+  })
+
   it('ignores non-Host ICE received from the remote peer', () => {
     const socket = new FakeSocket()
     const listener = vi.fn()
@@ -75,8 +93,13 @@ describe('LanSignalingClient', () => {
     socket.open()
     socket.receive({ event_id: 'e1', type: 'lan.peer_online', timestamp: '', data: { session_id: 's1' } })
     socket.receive({ event_id: 'e2', type: 'lan.ice', timestamp: '', data: { session_id: 's1', data: { candidate: 'candidate:2 1 UDP 1 203.0.113.2 6 typ srflx' } } })
-    socket.receive({ event_id: 'e3', type: 'lan.ice', timestamp: '', data: { session_id: 's1', data: { candidate: 'candidate:1 1 UDP 1 host.local 5 typ host' } } })
+    socket.receive({ event_id: 'e3', type: 'lan.ice', timestamp: '', data: { session_id: 's1', data: {
+      candidate: 'candidate:1 1 UDP 1 host.local 5 typ host', sdp_mid: '0', sdp_mline_index: 0,
+    } } })
     expect(listener.mock.calls.filter(([event]) => event.type === 'lan.ice')).toHaveLength(1)
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({ data: {
+      candidate: 'candidate:1 1 UDP 1 host.local 5 typ host', sdpMid: '0', sdpMLineIndex: 0,
+    } }))
   })
 
   it('returns to waiting and re-announces readiness when the socket reconnects', async () => {

@@ -36,7 +36,9 @@ class AndroidLanPeerFactory(context: Context) : LanPeerFactory {
             override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
             override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) = Unit
             override fun onIceCandidate(candidate: IceCandidate) {
-                callbackScope.launch { observer.onIceCandidate(candidate.sdp) }
+                callbackScope.launch {
+                    observer.onIceCandidate(LanIceCandidate(candidate.sdp, candidate.sdpMid, candidate.sdpMLineIndex))
+                }
             }
             override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) = Unit
             override fun onAddStream(stream: MediaStream) = Unit
@@ -82,9 +84,9 @@ private class WebRtcPeerConnection(
         native.setLocalDescription(SetSdpObserver(callback, sdp, dispatch), SessionDescription(SessionDescription.Type.ANSWER, sdp))
     }
 
-    override fun addIceCandidate(candidate: String) {
-        native.addIceCandidate(IceCandidate("", 0, candidate))
-    }
+    override fun addIceCandidate(candidate: LanIceCandidate): Boolean = native.addIceCandidate(
+        IceCandidate(candidate.sdpMid, candidate.sdpMLineIndex, candidate.candidate),
+    )
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return

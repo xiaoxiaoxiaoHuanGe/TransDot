@@ -8,17 +8,17 @@ import {
   type PeerConnectionLike,
   type SignalTransport,
 } from './peer'
-import type { LanSignalEvent } from './signaling'
+import type { LanIceCandidate, LanSignalEvent } from './signaling'
 import type { DirectoryHandle } from './types'
 
 class FakeSignals implements SignalTransport {
   listener?: (event: LanSignalEvent) => void
   offers: string[] = []
-  candidates: string[] = []
+  candidates: LanIceCandidate[] = []
   connected = 0
   subscribe(listener: (event: LanSignalEvent) => void) { this.listener = listener; return () => { this.listener = undefined } }
   sendOffer(sdp: string) { this.offers.push(sdp); return true }
-  sendICE(candidate: string) { this.candidates.push(candidate); return true }
+  sendICE(candidate: LanIceCandidate) { this.candidates.push(candidate); return true }
   markConnected() { this.connected++; return true }
   cancel() { return true }
 }
@@ -42,17 +42,27 @@ class FakeChannel implements DataChannelLike {
 }
 
 class FakeConnection implements PeerConnectionLike {
-  onicecandidate: ((event: { candidate: { candidate: string } | null }) => void) | null = null
+  onicecandidate: ((event: { candidate: LanIceCandidate | null }) => void) | null = null
   onconnectionstatechange: (() => void) | null = null
   connectionState = 'new'
   channel = new FakeChannel()
   remote: unknown
   channelOptions?: RTCDataChannelInit
+  offerGate?: Promise<void>
   createDataChannel(_label: string, options: RTCDataChannelInit) { this.channelOptions = options; return this.channel }
-  async createOffer() { return { type: 'offer' as RTCSdpType, sdp: 'web-offer' } }
+  async createOffer() { await this.offerGate; return { type: 'offer' as RTCSdpType, sdp: 'web-offer' } }
   async setLocalDescription() {}
-  async setRemoteDescription(description: RTCSessionDescriptionInit) { this.remote = description }
-  async addIceCandidate() {}
+  addedCandidates: RTCIceCandidateInit[] = []
+  prematureCandidates: RTCIceCandidateInit[] = []
+  remoteDescriptionReady = false
+  async setRemoteDescription(description: RTCSessionDescriptionInit) {
+    this.remote = description
+    this.remoteDescriptionReady = true
+  }
+  async addIceCandidate(candidate: RTCIceCandidateInit) {
+    if (this.remoteDescriptionReady) this.addedCandidates.push(candidate)
+    else this.prematureCandidates.push(candidate)
+  }
   close() { this.connectionState = 'closed' }
 }
 
@@ -113,11 +123,72 @@ describe('LanPeer', () => {
     new LanPeer(signals, () => connection)
     signals.listener?.({ type: 'lan.peer_online', sessionId: 's1' })
     await vi.waitFor(() => expect(signals.offers).toHaveLength(1))
-    connection.onicecandidate?.({ candidate: { candidate: 'candidate:1 1 UDP 1 host.local 5 typ host' } })
-    connection.onicecandidate?.({ candidate: { candidate: 'candidate:2 1 UDP 1 203.0.113.2 6 typ srflx' } })
+    connection.onicecandidate?.({ candidate: {
+      candidate: 'candidate:1 1 UDP 1 host.local 5 typ host', sdpMid: '0', sdpMLineIndex: 0,
+    } })
+    connection.onicecandidate?.({ candidate: {
+      candidate: 'candidate:2 1 UDP 1 203.0.113.2 6 typ srflx', sdpMid: '0', sdpMLineIndex: 0,
+    } })
     expect(signals.candidates).toHaveLength(1)
+    expect(signals.candidates[0]).toEqual({
+      candidate: 'candidate:1 1 UDP 1 host.local 5 typ host', sdpMid: '0', sdpMLineIndex: 0,
+    })
     signals.listener?.({ type: 'lan.answer', sessionId: 's1', data: { sdp: 'android-answer' } })
     await vi.waitFor(() => expect(connection.remote).toEqual({ type: 'answer', sdp: 'android-answer' }))
+  })
+
+  it('queues remote ICE until the Android answer is set', async () => {
+    const signals = new FakeSignals()
+    const connection = new FakeConnection()
+    new LanPeer(signals, () => connection)
+    signals.listener?.({ type: 'lan.peer_online', sessionId: 's1' })
+    await vi.waitFor(() => expect(signals.offers).toHaveLength(1))
+    const candidate = {
+      candidate: 'candidate:1 1 UDP 1 192.168.1.20 5000 typ host', sdpMid: '0', sdpMLineIndex: 0,
+    }
+
+    signals.listener?.({ type: 'lan.ice', sessionId: 's1', data: candidate })
+    await Promise.resolve()
+    expect(connection.prematureCandidates).toEqual([])
+
+    signals.listener?.({ type: 'lan.answer', sessionId: 's1', data: { sdp: 'android-answer' } })
+    await vi.waitFor(() => expect(connection.addedCandidates).toEqual([candidate]))
+  })
+
+  it('ignores ICE from an old signaling session', async () => {
+    const signals = new FakeSignals()
+    const connection = new FakeConnection()
+    new LanPeer(signals, () => connection)
+    signals.listener?.({ type: 'lan.peer_online', sessionId: 'current' })
+    await vi.waitFor(() => expect(signals.offers).toHaveLength(1))
+
+    signals.listener?.({ type: 'lan.ice', sessionId: 'old', data: {
+      candidate: 'candidate:1 1 UDP 1 192.168.1.20 5000 typ host', sdpMid: '0', sdpMLineIndex: 0,
+    } })
+
+    expect(connection.prematureCandidates).toEqual([])
+  })
+
+  it('does not publish an old offer after a replacement session starts', async () => {
+    const signals = new FakeSignals()
+    const connections = [new FakeConnection(), new FakeConnection()]
+    let releaseOldOffer: (() => void) | undefined
+    connections[0].offerGate = new Promise<void>((resolve) => { releaseOldOffer = resolve })
+    let index = 0
+    new LanPeer(signals, () => connections[index++])
+    signals.listener?.({ type: 'lan.peer_online', sessionId: 'old' })
+    await vi.waitFor(() => expect(index).toBe(1))
+    signals.listener?.({ type: 'lan.peer_online', sessionId: 'new' })
+    await vi.waitFor(() => expect(signals.offers).toHaveLength(1))
+
+    releaseOldOffer?.()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    connections[0].onicecandidate?.({ candidate: {
+      candidate: 'candidate:1 1 UDP 1 192.168.1.20 5000 typ host', sdpMid: '0', sdpMLineIndex: 0,
+    } })
+
+    expect(signals.offers).toEqual(['web-offer'])
+    expect(signals.candidates).toEqual([])
   })
 
   it('fails after eight seconds without silently falling back', async () => {
