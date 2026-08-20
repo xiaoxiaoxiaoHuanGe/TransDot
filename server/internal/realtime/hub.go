@@ -91,6 +91,20 @@ func (h *Hub) Publish(eventType string, data any) {
 	}
 }
 
+func (h *Hub) PublishTo(deviceID, eventType string, data any) bool {
+	event := newEvent(eventType, data)
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	deviceClients := h.clients[deviceID]
+	for client := range deviceClients {
+		select {
+		case client.events <- event:
+		default:
+		}
+	}
+	return len(deviceClients) > 0
+}
+
 func (h *Hub) RevokeDevices(deviceIDs []string) {
 	if len(deviceIDs) == 0 {
 		return

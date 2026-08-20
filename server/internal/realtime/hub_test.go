@@ -45,3 +45,29 @@ func TestHubPublishesRevokesAndShutsDown(t *testing.T) {
 		t.Fatal("active connection did not receive shutdown")
 	}
 }
+
+func TestPublishToOnlyReachesTargetDevice(t *testing.T) {
+	hub := NewHub()
+	target := hub.Subscribe("target")
+	other := hub.Subscribe("other")
+
+	if !hub.PublishTo("target", "lan.peer_online", map[string]string{"session_id": "session-1"}) {
+		t.Fatal("target was not connected")
+	}
+	select {
+	case event := <-target.Events():
+		if event.Type != "lan.peer_online" {
+			t.Fatalf("target event = %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("target received nothing")
+	}
+	select {
+	case event := <-other.Events():
+		t.Fatalf("other received %#v", event)
+	default:
+	}
+	if hub.PublishTo("missing", "lan.peer_online", nil) {
+		t.Fatal("missing target reported connected")
+	}
+}

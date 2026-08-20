@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"transdot.local/transfer-assistant/server/internal/deviceauth"
+	"transdot.local/transfer-assistant/server/internal/lantransfer"
 	"transdot.local/transfer-assistant/server/internal/pairing"
 	"transdot.local/transfer-assistant/server/internal/realtime"
 	"transdot.local/transfer-assistant/server/internal/setup"
@@ -79,9 +80,9 @@ func NewWithFeatures(
 func NewComplete(
 	db databasePinger, setupService setupService, authService deviceAuthenticator,
 	pairingService pairingService, bootstrapService bootstrapService, messageService messageService, fileService fileService,
-	instances instanceService, publicURL string, hub *realtime.Hub, webHandler http.Handler, logger *slog.Logger,
+	instances instanceService, publicURL string, lanBroker *lantransfer.Broker, hub *realtime.Hub, webHandler http.Handler, logger *slog.Logger,
 ) http.Handler {
-	return newHandlerComplete(db, setupService, authService, pairingService, bootstrapService, messageService, fileService, instances, publicURL, hub, webHandler, logger)
+	return newHandlerComplete(db, setupService, authService, pairingService, bootstrapService, messageService, fileService, instances, publicURL, lanBroker, hub, webHandler, logger)
 }
 
 func newHandler(
@@ -103,13 +104,13 @@ func newHandlerWithInstance(
 	pairingService pairingService, messageService messageService, fileService fileService,
 	instances instanceService, publicURL string, hub *realtime.Hub, webHandler http.Handler, logger *slog.Logger,
 ) http.Handler {
-	return newHandlerComplete(db, setupService, authService, pairingService, nil, messageService, fileService, instances, publicURL, hub, webHandler, logger)
+	return newHandlerComplete(db, setupService, authService, pairingService, nil, messageService, fileService, instances, publicURL, nil, hub, webHandler, logger)
 }
 
 func newHandlerComplete(
 	db databasePinger, setupService setupService, authService deviceAuthenticator,
 	pairingService pairingService, bootstrapService bootstrapService, messageService messageService, fileService fileService,
-	instances instanceService, publicURL string, hub *realtime.Hub, webHandler http.Handler, logger *slog.Logger,
+	instances instanceService, publicURL string, lanBroker *lantransfer.Broker, hub *realtime.Hub, webHandler http.Handler, logger *slog.Logger,
 ) http.Handler {
 	mux := http.NewServeMux()
 	setupLimiter := newAttemptLimiter(5, 5*time.Minute)
@@ -150,7 +151,7 @@ func newHandlerComplete(
 		mux.HandleFunc("GET /api/v1/files/{id}/thumbnail", serveThumbnail(authService, fileService, logger))
 	}
 	mux.HandleFunc("/api/", apiNotFound)
-	mux.HandleFunc("GET /ws", websocketEndpoint(authService, hub, logger))
+	mux.HandleFunc("GET /ws", websocketEndpoint(authService, hub, lanBroker, logger))
 	mux.Handle("/", webHandler)
 
 	return recoverRequests(logger, logRequests(logger, mux))
