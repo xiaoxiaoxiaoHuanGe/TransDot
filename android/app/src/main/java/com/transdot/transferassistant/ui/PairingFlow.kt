@@ -71,6 +71,8 @@ fun PairingFlow(
     onSubmitCode: () -> Unit,
     onQRCode: (String) -> Unit,
     onScannerError: (String) -> Unit,
+    onConfirmBrowserPairing: () -> Unit = {},
+    onCancelBrowserPairing: () -> Unit = {},
     onConfirmReplacement: () -> Unit,
     onCancelReplacement: () -> Unit,
     onConfirmBootstrap: () -> Unit = {},
@@ -101,12 +103,28 @@ fun PairingFlow(
         PairingScreen.Success -> PairingSuccessScreen(onBack = onBack)
     }
 
+    state.pairingDeviceName?.let { deviceName ->
+        AlertDialog(
+            onDismissRequest = onCancelBrowserPairing,
+            title = { Text("添加浏览器？") },
+            text = { Text("将授权“$deviceName”访问当前服务器。现有浏览器不会受影响。") },
+            confirmButton = {
+                Button(onClick = onConfirmBrowserPairing, enabled = !state.isSubmitting) {
+                    Text(if (state.isSubmitting) "添加中" else "添加浏览器")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onCancelBrowserPairing, enabled = !state.isSubmitting) { Text("取消") }
+            },
+        )
+    }
+
     if (state.replacementRequired) {
         AlertDialog(
             onDismissRequest = onCancelReplacement,
-            title = { Text("替换当前 Windows？") },
+            title = { Text("旧版服务器要求替换浏览器") },
             text = {
-                Text("服务器已有一台有效 Windows。继续配对会立即撤销旧浏览器的 REST 与 WebSocket 权限。")
+                Text("此服务器仍使用单浏览器模式。继续会立即撤销旧浏览器的 REST 与 WebSocket 权限。")
             },
             confirmButton = {
                 Button(onClick = onConfirmReplacement) { Text("确认替换") }
@@ -314,12 +332,12 @@ private fun PairingSuccessScreen(onBack: () -> Unit) {
                     }
                 }
                 Text(
-                    "Windows 配对成功",
+                    "浏览器添加成功",
                     modifier = Modifier.semantics { heading() },
                     style = MaterialTheme.typography.headlineMedium,
                 )
                 Text(
-                    "电脑已获得安全浏览器凭据。服务端同时只保留一台有效 Windows。",
+                    "电脑已获得安全浏览器凭据，其他已授权浏览器不会受影响。",
                     textAlign = TextAlign.Center,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodyLarge,

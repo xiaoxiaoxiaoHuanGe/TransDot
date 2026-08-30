@@ -20,8 +20,9 @@ var (
 )
 
 type Device struct {
-	ID   string
-	Type string
+	ID          string
+	Type        string
+	DisplayName string
 }
 
 type Service struct {
@@ -42,10 +43,10 @@ func (s *Service) Authenticate(ctx context.Context, token, expectedType string) 
 	var device Device
 	var revokedAt sql.NullString
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, device_type, revoked_at
+		SELECT id, device_type, display_name, revoked_at
 		FROM devices
 		WHERE token_hash = ?
-	`, tokenHash[:]).Scan(&device.ID, &device.Type, &revokedAt)
+	`, tokenHash[:]).Scan(&device.ID, &device.Type, &device.DisplayName, &revokedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Device{}, ErrUnauthorized
 	}

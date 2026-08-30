@@ -126,7 +126,7 @@ func (s *Service) Claim(ctx context.Context, sessionID, secret string) (setup.Cl
 	}
 	masterHash := sha256.Sum256([]byte(masterToken))
 	deviceID := uuid.NewString()
-	if _, err = tx.ExecContext(ctx, `INSERT INTO devices(id, device_type, token_hash) VALUES (?, 'android_master', ?)`, deviceID, masterHash[:]); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO devices(id, device_type, token_hash, display_name) VALUES (?, 'android_master', ?, 'Android Master')`, deviceID, masterHash[:]); err != nil {
 		return setup.ClaimResult{}, err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE bootstrap_sessions SET status='approved', consumed_at=? WHERE id=? AND status='pending'`, s.now().UTC().Format(time.RFC3339Nano), sessionID); err != nil {

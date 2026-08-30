@@ -16,6 +16,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.android.tools.screenshot.PreviewTest
 import com.transdot.transferassistant.data.AppSettings
+import com.transdot.transferassistant.data.BrowserDevice
 import com.transdot.transferassistant.data.FileAttachment
 import com.transdot.transferassistant.data.ServerProfileSummary
 import com.transdot.transferassistant.data.TimelineMessage
@@ -36,6 +37,7 @@ fun EmptyTimelineLightPreview() {
                 activeServerName = "个人服务器",
                 connection = TimelineConnectionState.Connected,
                 onPairWindows = PreviewNoOp,
+                onOpenLanTransfer = PreviewNoOp,
                 onSearch = PreviewNoOp,
                 onSettings = PreviewNoOp,
             )
@@ -146,6 +148,47 @@ fun SettingsLightPreview() {
             onSwitchServer = { _ -> Result.success(Unit) },
             onRenameServer = { _, _ -> true },
             onDeleteServer = { true },
+        )
+    }
+}
+
+@PreviewTest
+@Preview(name = "Browser devices light", widthDp = 393, heightDp = 852)
+@Composable
+fun BrowserDevicesLightPreview() {
+    TransferAssistantTheme(mode = ThemeMode.Light) {
+        BrowserDevicesSheetContent(
+            state = BrowserDevicesUiState(
+                loading = false,
+                devices = listOf(
+                    BrowserDevice("browser-1", "书房电脑", "2026-08-29T08:00:00Z", "2026-08-30T11:00:00Z"),
+                    BrowserDevice("browser-2", "办公室 Chrome", "2026-08-28T08:00:00Z", null),
+                ),
+            ),
+            onRefresh = PreviewNoOp,
+            onRename = { _, _ -> },
+            onRevoke = {},
+            onClearError = PreviewNoOp,
+        )
+    }
+}
+
+@PreviewTest
+@Preview(name = "Browser devices dark large text", widthDp = 360, heightDp = 720, fontScale = 1.3f, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+fun BrowserDevicesDarkLargeTextPreview() {
+    TransferAssistantTheme(mode = ThemeMode.Dark) {
+        BrowserDevicesSheetContent(
+            state = BrowserDevicesUiState(
+                loading = false,
+                devices = listOf(
+                    BrowserDevice("browser-3", "客厅里名称很长的浏览器设备", "2026-08-27T08:00:00Z", "2026-08-30T11:30:00Z"),
+                ),
+            ),
+            onRefresh = PreviewNoOp,
+            onRename = { _, _ -> },
+            onRevoke = {},
+            onClearError = PreviewNoOp,
         )
     }
 }

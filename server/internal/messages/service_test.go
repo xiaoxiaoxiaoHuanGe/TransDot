@@ -112,6 +112,26 @@ func TestTextValidation(t *testing.T) {
 	}
 }
 
+func TestTimelineUsesCurrentSourceDeviceName(t *testing.T) {
+	db := testDatabase(t)
+	service := NewService(db)
+	ctx := context.Background()
+	created, err := service.CreateText(ctx, "android-1", "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.SourceDeviceName != "Android Master" {
+		t.Fatalf("created source name = %q", created.SourceDeviceName)
+	}
+	if _, err := db.Exec(`UPDATE devices SET display_name = 'Phone' WHERE id = 'android-1'`); err != nil {
+		t.Fatal(err)
+	}
+	page, err := service.List(ctx, "", 50)
+	if err != nil || len(page.Messages) != 1 || page.Messages[0].SourceDeviceName != "Phone" {
+		t.Fatalf("timeline = %+v, %v", page.Messages, err)
+	}
+}
+
 func testDatabase(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := database.Open(t.TempDir())
@@ -121,8 +141,8 @@ func testDatabase(t *testing.T) *sql.DB {
 	t.Cleanup(func() { db.Close() })
 	tokenHash := sha256.Sum256([]byte("android-token"))
 	if _, err := db.Exec(`
-		INSERT INTO devices (id, device_type, token_hash)
-		VALUES ('android-1', 'android_master', ?)
+		INSERT INTO devices (id, device_type, token_hash, display_name)
+		VALUES ('android-1', 'android_master', ?, 'Android Master')
 	`, tokenHash[:]); err != nil {
 		t.Fatalf("insert test device: %v", err)
 	}

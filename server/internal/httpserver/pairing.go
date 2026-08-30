@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"transdot.local/transfer-assistant/server/internal/devices"
 	"transdot.local/transfer-assistant/server/internal/pairing"
 )
 
@@ -17,6 +18,10 @@ type pairingActionRequest struct {
 	QRSecret        string `json:"qr_secret"`
 	PairingCode     string `json:"pairing_code"`
 	ReplaceExisting bool   `json:"replace_existing"`
+}
+
+type pairingCreateRequest struct {
+	DeviceName string `json:"device_name"`
 }
 
 func createPairingSession(service pairingService, limiter *attemptLimiter, logger *slog.Logger) http.HandlerFunc {
@@ -32,13 +37,29 @@ func createPairingSessionWithInstance(service pairingService, limiter *attemptLi
 			writeError(w, http.StatusTooManyRequests, "RATE_LIMITED", "Too many pairing sessions. Try again later.")
 			return
 		}
-		session, err := service.Create(r.Context())
+		request := pairingCreateRequest{DeviceName: devices.DefaultBrowserName}
+		if r.ContentLength != 0 {
+			if err := decodeJSONBody(w, r, &request); err != nil {
+				writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "Request body must be valid JSON.")
+				return
+			}
+		}
+		if strings.TrimSpace(request.DeviceName) == "" {
+			request.DeviceName = devices.DefaultBrowserName
+		}
+		normalizedName, nameErr := devices.NormalizeDisplayName(request.DeviceName)
+		if nameErr != nil {
+			writePairingError(w, nameErr, logger)
+			return
+		}
+		session, err := service.Create(r.Context(), normalizedName)
 		switch {
 		case err == nil:
 			payload := map[string]any{
 				"v":          1,
 				"session_id": session.ID,
 				"qr_secret":  session.QRSecret,
+				"device_name": session.DeviceName,
 			}
 			if instances != nil {
 				identity, identityErr := instances.Get(r.Context())
@@ -70,6 +91,7 @@ func createPairingSessionWithInstance(service pairingService, limiter *attemptLi
 				"qr_payload":            string(qrPayload),
 				"expires_at":            session.ExpiresAt.UTC().Format(time.RFC3339Nano),
 				"poll_interval_seconds": 2,
+				"device_name":           session.DeviceName,
 			})
 		case errors.Is(err, pairing.ErrNotInitialized):
 			writeError(w, http.StatusConflict, "SETUP_REQUIRED", "Android Master setup is required first.")
@@ -172,6 +194,10 @@ func writePairingError(w http.ResponseWriter, err error, logger *slog.Logger) {
 		writeError(w, http.StatusBadRequest, "PAIRING_INVALID", "Pairing session or credential is invalid.")
 	case errors.Is(err, pairing.ErrReplacementRequired):
 		writeError(w, http.StatusConflict, "WINDOWS_REPLACEMENT_REQUIRED", "An active Windows browser already exists.")
+	case errors.Is(err, pairing.ErrBrowserLimitReached):
+		writeError(w, http.StatusConflict, "BROWSER_LIMIT_REACHED", "Maximum browser device count reached. Revoke a browser on Android first.")
+	case errors.Is(err, devices.ErrInvalidDisplayName):
+		writeError(w, http.StatusBadRequest, "INVALID_DEVICE_NAME", "Device name must contain 1 to 64 characters without control characters.")
 	default:
 		logger.Error("pairing request", "error", err)
 		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error.")

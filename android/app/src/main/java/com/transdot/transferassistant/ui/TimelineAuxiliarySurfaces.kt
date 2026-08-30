@@ -138,7 +138,7 @@ internal fun SearchScreen(
                                 )
                                 Spacer(Modifier.height(AppSpacing.small))
                                 Text(
-                                    "${if (message.sourceDeviceType == "android_master") "Android" else "Windows"} · ${formatMessageTime(message.createdAt)}",
+                                    "${timelineSourceLabel(message.sourceDeviceType, message.sourceDeviceName)} · ${formatMessageTime(message.createdAt)}",
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.labelSmall,
                                 )
@@ -204,6 +204,9 @@ internal fun SettingsSheet(
     activeProfileId: String,
     connection: TimelineConnectionState,
     transferBusy: Boolean,
+    browserDeviceCount: Int = 0,
+    browserDeviceMaximum: Int = 10,
+    browserDevicesSupported: Boolean = true,
     onChange: (ThemeMode) -> Unit,
     onChooseDefaultFolder: () -> Unit,
     onClearDefaultFolder: () -> Unit,
@@ -212,6 +215,7 @@ internal fun SettingsSheet(
     onSwitchServer: suspend (String) -> Result<Unit>,
     onRenameServer: (String, String) -> Boolean,
     onDeleteServer: (String) -> Boolean,
+    onOpenBrowserDevices: () -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -223,6 +227,9 @@ internal fun SettingsSheet(
             activeProfileId,
             connection,
             transferBusy,
+            browserDeviceCount,
+            browserDeviceMaximum,
+            browserDevicesSupported,
             onChange,
             onChooseDefaultFolder,
             onClearDefaultFolder,
@@ -231,6 +238,7 @@ internal fun SettingsSheet(
             onSwitchServer,
             onRenameServer,
             onDeleteServer,
+            onOpenBrowserDevices,
         )
     }
 }
@@ -244,6 +252,9 @@ internal fun SettingsSheetContent(
     activeProfileId: String,
     connection: TimelineConnectionState,
     transferBusy: Boolean,
+    browserDeviceCount: Int = 0,
+    browserDeviceMaximum: Int = 10,
+    browserDevicesSupported: Boolean = true,
     onChange: (ThemeMode) -> Unit,
     onChooseDefaultFolder: () -> Unit,
     onClearDefaultFolder: () -> Unit,
@@ -252,6 +263,7 @@ internal fun SettingsSheetContent(
     onSwitchServer: suspend (String) -> Result<Unit>,
     onRenameServer: (String, String) -> Boolean,
     onDeleteServer: (String) -> Boolean,
+    onOpenBrowserDevices: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     var showAddServer by remember { mutableStateOf(false) }
@@ -290,6 +302,30 @@ internal fun SettingsSheetContent(
                 Switch(checked = appSettings.notificationsEnabled, onCheckedChange = onNotificationsChanged)
             }
             HorizontalDivider()
+            if (browserDevicesSupported) {
+                Text("设备", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                Surface(
+                    onClick = onOpenBrowserDevices,
+                    shape = MaterialTheme.shapes.medium,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                ) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(AppSpacing.medium),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("已授权浏览器", style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                "$browserDeviceCount / $browserDeviceMaximum",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        Text("管理", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
+                    }
+                }
+                HorizontalDivider()
+            }
             Text("服务器", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
             if (transferBusy) AppStatusPanel(StatusTone.Info, "传输进行中", "完成后才能切换或删除服务器。")
             serverProfiles.forEach { profile ->

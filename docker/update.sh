@@ -1,6 +1,11 @@
 #!/bin/sh
 set -eu
 
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+. "$SCRIPT_DIR/maintenance-common.sh"
+LOCK_OWNED=0
+trap 'release_lock' EXIT HUP INT TERM
+
 PROJECT_DIR=${TRANSDOT_PROJECT_DIR:-/opt/transdot}
 PROJECT_NAME=transdot
 HEALTH_URL=${TRANSDOT_HEALTH_URL:-http://127.0.0.1:5757/healthz}
@@ -9,6 +14,8 @@ if [ ! -f "$PROJECT_DIR/docker-compose.yml" ]; then
   echo "TransDot compose file not found in $PROJECT_DIR" >&2
   exit 1
 fi
+
+acquire_lock
 
 cd "$PROJECT_DIR"
 git pull --ff-only

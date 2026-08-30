@@ -109,10 +109,10 @@ func (h *Hub) RevokeDevices(deviceIDs []string) {
 	if len(deviceIDs) == 0 {
 		return
 	}
-	event := newEvent("device.replaced", map[string]string{"reason": "windows_replaced"})
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, deviceID := range deviceIDs {
+		event := newEvent("device.revoked", map[string]string{"id": deviceID})
 		clients := h.clients[deviceID]
 		delete(h.clients, deviceID)
 		for client := range clients {

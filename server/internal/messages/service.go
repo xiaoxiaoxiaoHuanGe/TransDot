@@ -40,6 +40,7 @@ type Message struct {
 	BatchID           *string     `json:"batch_id"`
 	SourceDeviceID    string      `json:"source_device_id"`
 	SourceDeviceType  string      `json:"source_device_type"`
+	SourceDeviceName  string      `json:"source_device_name"`
 	TextContent       *string     `json:"text_content"`
 	CreatedAt         time.Time   `json:"created_at"`
 	MetadataExpiresAt *time.Time  `json:"metadata_expires_at"`
@@ -109,8 +110,8 @@ func (s *Service) CreateText(ctx context.Context, sourceDeviceID, content string
 		return Message{}, fmt.Errorf("index text message: %w", err)
 	}
 
-	var sourceDeviceType string
-	if err := tx.QueryRowContext(ctx, `SELECT device_type FROM devices WHERE id = ?`, sourceDeviceID).Scan(&sourceDeviceType); err != nil {
+	var sourceDeviceType, sourceDeviceName string
+	if err := tx.QueryRowContext(ctx, `SELECT device_type, display_name FROM devices WHERE id = ?`, sourceDeviceID).Scan(&sourceDeviceType, &sourceDeviceName); err != nil {
 		return Message{}, fmt.Errorf("read source device type: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -122,6 +123,7 @@ func (s *Service) CreateText(ctx context.Context, sourceDeviceID, content string
 		Type:             TypeText,
 		SourceDeviceID:   sourceDeviceID,
 		SourceDeviceType: sourceDeviceType,
+		SourceDeviceName: sourceDeviceName,
 		TextContent:      &content,
 		CreatedAt:        now,
 	}, nil
@@ -136,7 +138,7 @@ func (s *Service) List(ctx context.Context, before string, limit int) (Page, err
 	}
 
 	query := `
-		SELECT m.id, m.type, m.batch_id, m.source_device_id, d.device_type,
+		SELECT m.id, m.type, m.batch_id, m.source_device_id, d.device_type, d.display_name,
 		       m.text_content, m.created_at, m.metadata_expires_at,
 		       f.id, f.original_filename, f.mime_type, f.size_bytes, f.status,
 		       f.expires_at, f.expired_reason, f.thumbnail_key
@@ -217,7 +219,7 @@ func (s *Service) Search(ctx context.Context, queryText string) ([]Message, erro
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT m.id, m.type, m.batch_id, m.source_device_id, d.device_type,
+		SELECT m.id, m.type, m.batch_id, m.source_device_id, d.device_type, d.display_name,
 		       m.text_content, m.created_at, m.metadata_expires_at,
 		       f.id, f.original_filename, f.mime_type, f.size_bytes, f.status,
 		       f.expires_at, f.expired_reason, f.thumbnail_key
@@ -243,7 +245,7 @@ func (s *Service) Context(ctx context.Context, messageID string) (Context, error
 	}
 
 	beforeRows, err := s.db.QueryContext(ctx, `
-		SELECT m.id, m.type, m.batch_id, m.source_device_id, d.device_type,
+		SELECT m.id, m.type, m.batch_id, m.source_device_id, d.device_type, d.display_name,
 		       m.text_content, m.created_at, m.metadata_expires_at,
 		       f.id, f.original_filename, f.mime_type, f.size_bytes, f.status,
 		       f.expires_at, f.expired_reason, f.thumbnail_key
@@ -263,7 +265,7 @@ func (s *Service) Context(ctx context.Context, messageID string) (Context, error
 	}
 
 	afterRows, err := s.db.QueryContext(ctx, `
-		SELECT m.id, m.type, m.batch_id, m.source_device_id, d.device_type,
+		SELECT m.id, m.type, m.batch_id, m.source_device_id, d.device_type, d.display_name,
 		       m.text_content, m.created_at, m.metadata_expires_at,
 		       f.id, f.original_filename, f.mime_type, f.size_bytes, f.status,
 		       f.expires_at, f.expired_reason, f.thumbnail_key
@@ -289,7 +291,7 @@ func (s *Service) Context(ctx context.Context, messageID string) (Context, error
 
 func (s *Service) messageByID(ctx context.Context, messageID string) (Message, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT m.id, m.type, m.batch_id, m.source_device_id, d.device_type,
+		SELECT m.id, m.type, m.batch_id, m.source_device_id, d.device_type, d.display_name,
 		       m.text_content, m.created_at, m.metadata_expires_at,
 		       f.id, f.original_filename, f.mime_type, f.size_bytes, f.status,
 		       f.expires_at, f.expired_reason, f.thumbnail_key
@@ -319,7 +321,7 @@ func scanMessage(scan func(...any) error) (Message, error) {
 	var createdAtRaw string
 	if err := scan(
 		&message.ID, &message.Type, &batchID, &message.SourceDeviceID,
-		&message.SourceDeviceType, &textContent, &createdAtRaw, &metadataExpiresAt,
+		&message.SourceDeviceType, &message.SourceDeviceName, &textContent, &createdAtRaw, &metadataExpiresAt,
 		&fileID, &filename, &mimeType, &fileSize, &fileStatus, &fileExpiresAt, &expiredReason, &thumbnailKey,
 	); err != nil {
 		return Message{}, err

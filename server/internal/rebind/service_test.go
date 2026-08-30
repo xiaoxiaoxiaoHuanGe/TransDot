@@ -44,6 +44,10 @@ func TestClaimRotatesMasterAndIsSingleUse(t *testing.T) {
 	if active != 1 {
 		t.Fatalf("active masters = %d", active)
 	}
+	var masterName string
+	if err = db.QueryRow(`SELECT display_name FROM devices WHERE id = ?`, claimed.DeviceID).Scan(&masterName); err != nil || masterName != "Android Master" {
+		t.Fatalf("rebound master display name = %q, %v", masterName, err)
+	}
 }
 
 func TestCreateRequiresInitializedServer(t *testing.T) {

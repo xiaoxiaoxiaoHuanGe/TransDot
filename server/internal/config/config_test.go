@@ -17,6 +17,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("FILE_TTL_HOURS", "")
 	t.Setenv("FILE_MESSAGE_TTL_DAYS", "")
 	t.Setenv("UPLOAD_SESSION_TTL_MINUTES", "")
+	t.Setenv("MAX_BROWSER_DEVICES", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -34,11 +35,28 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.PairingTTL.Seconds() != 120 {
 		t.Fatalf("PairingTTL = %v, want 120s", cfg.PairingTTL)
 	}
+	if cfg.MaxBrowserDevices != 10 {
+		t.Fatalf("MaxBrowserDevices = %d, want 10", cfg.MaxBrowserDevices)
+	}
 	if cfg.MaxFileBytes != 314572800 || cfg.MaxBatchBytes != 524288000 || cfg.MaxBatchItems != 20 {
 		t.Fatalf("upload limits = %d/%d/%d", cfg.MaxFileBytes, cfg.MaxBatchBytes, cfg.MaxBatchItems)
 	}
 	if cfg.FilePoolMaxBytes != 1073741824 || cfg.FileTTL != 24*time.Hour || cfg.FileMessageTTL != 30*24*time.Hour || cfg.UploadSessionTTL != 30*time.Minute {
 		t.Fatalf("file lifecycle defaults are incorrect: %+v", cfg)
+	}
+}
+
+func TestLoadValidatesMaximumBrowserDevices(t *testing.T) {
+	t.Setenv("MAX_BROWSER_DEVICES", "50")
+	cfg, err := Load()
+	if err != nil || cfg.MaxBrowserDevices != 50 {
+		t.Fatalf("Load() = %+v, %v", cfg, err)
+	}
+	for _, invalid := range []string{"0", "51", "not-a-number"} {
+		t.Setenv("MAX_BROWSER_DEVICES", invalid)
+		if _, err := Load(); err == nil {
+			t.Fatalf("Load() accepted MAX_BROWSER_DEVICES=%q", invalid)
+		}
 	}
 }
 

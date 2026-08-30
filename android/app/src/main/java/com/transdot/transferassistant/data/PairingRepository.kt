@@ -15,12 +15,14 @@ sealed interface PairingCredential {
         val secret: String,
         val serverAddress: String = "",
         val instanceId: String = "",
+        val deviceName: String = "浏览器设备",
     ) : PairingCredential
     data class Code(val value: String) : PairingCredential
 }
 
 sealed class PairingFailure(message: String, cause: Throwable? = null) : Exception(message, cause) {
     class ReplacementRequired : PairingFailure("当前已有一台 Windows，继续将使旧浏览器立即失效。")
+    class BrowserLimitReached : PairingFailure("已达到浏览器上限，请先在设置的“已授权浏览器”中撤销一台设备。")
     class Invalid : PairingFailure("配对二维码或 6 位码无效。")
     class Expired : PairingFailure("配对会话已过期，请在电脑上生成新二维码。")
     class Unauthorized : PairingFailure("Android Master 凭据已失效。")
@@ -106,16 +108,9 @@ class NetworkPairingRepository(
 
     private fun mapFailure(response: Response): PairingFailure {
         val error = runCatching { JSONObject(response.body).optJSONObject("error") }.getOrNull()
-        return when (error?.optString("code")) {
-            "WINDOWS_REPLACEMENT_REQUIRED" -> PairingFailure.ReplacementRequired()
-            "PAIRING_INVALID" -> PairingFailure.Invalid()
-            "PAIRING_EXPIRED" -> PairingFailure.Expired()
-            "UNAUTHORIZED", "DEVICE_REVOKED" -> PairingFailure.Unauthorized()
-            "RATE_LIMITED" -> PairingFailure.RateLimited()
-            else -> PairingFailure.Server(error?.optString("message").orEmpty().ifBlank {
-                "服务器请求失败（HTTP ${response.status}）。"
-            })
-        }
+        return pairingFailureForCode(error?.optString("code"), error?.optString("message").orEmpty().ifBlank {
+            "服务器请求失败（HTTP ${response.status}）。"
+        })
     }
 
     private fun readLimited(input: InputStream): String {
@@ -137,4 +132,14 @@ class NetworkPairingRepository(
     private companion object {
         const val MAX_RESPONSE_BYTES = 64 * 1024
     }
+}
+
+internal fun pairingFailureForCode(code: String?, fallbackMessage: String): PairingFailure = when (code) {
+    "WINDOWS_REPLACEMENT_REQUIRED" -> PairingFailure.ReplacementRequired()
+    "BROWSER_LIMIT_REACHED" -> PairingFailure.BrowserLimitReached()
+    "PAIRING_INVALID" -> PairingFailure.Invalid()
+    "PAIRING_EXPIRED" -> PairingFailure.Expired()
+    "UNAUTHORIZED", "DEVICE_REVOKED" -> PairingFailure.Unauthorized()
+    "RATE_LIMITED" -> PairingFailure.RateLimited()
+    else -> PairingFailure.Server(fallbackMessage)
 }

@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -34,6 +35,7 @@ import com.transdot.transferassistant.data.AppSettings
 import com.transdot.transferassistant.data.DownloadDestinationManager
 import com.transdot.transferassistant.data.NetworkPairingRepository
 import com.transdot.transferassistant.data.NetworkBootstrapRepository
+import com.transdot.transferassistant.data.NetworkBrowserDeviceRepository
 import com.transdot.transferassistant.data.NetworkRebindRepository
 import com.transdot.transferassistant.data.NetworkTimelineRepository
 import com.transdot.transferassistant.data.SecureSessionStore
@@ -49,6 +51,7 @@ import com.transdot.transferassistant.lan.LanSignalingClient
 import com.transdot.transferassistant.lan.OkHttpLanWebSocketTransport
 import com.transdot.transferassistant.ui.LanTransferScreen
 import com.transdot.transferassistant.ui.LanTransferViewModel
+import com.transdot.transferassistant.ui.BrowserDevicesViewModel
 import com.transdot.transferassistant.ui.StoredLanTransferFiles
 import com.transdot.transferassistant.ui.PairingFlow
 import com.transdot.transferassistant.ui.PairingViewModel
@@ -262,12 +265,16 @@ private fun PairingContent(
     val timelineRepository = remember { NetworkTimelineRepository(allowCleartext = BuildConfig.DEBUG, context = context.applicationContext) }
     val pairingFactory = remember { PairingViewModel.Factory(pairingRepository, sessionStore, bootstrapRepository, rebindRepository, BuildConfig.DEBUG, onSessionChanged) }
     val timelineFactory = remember { TimelineViewModel.Factory(timelineRepository, sessionStore, notifier) }
+    val browserDevicesRepository = remember { NetworkBrowserDeviceRepository(allowCleartext = BuildConfig.DEBUG) }
+    val browserDevicesFactory = remember { BrowserDevicesViewModel.Factory(browserDevicesRepository, sessionStore) }
     val lanHttpClient = remember { OkHttpClient() }
     val profileId = sessionStore.activeProfileId().orEmpty()
     val pairingViewModel: PairingViewModel = viewModel(key = "pairing-$profileId", factory = pairingFactory)
     val timelineViewModel: TimelineViewModel = viewModel(key = "timeline-$profileId", factory = timelineFactory)
+    val browserDevicesViewModel: BrowserDevicesViewModel = viewModel(key = "browser-devices-$profileId", factory = browserDevicesFactory)
     val pairingUiState by pairingViewModel.uiState.collectAsStateWithLifecycle()
     val timelineUiState by timelineViewModel.uiState.collectAsStateWithLifecycle()
+    val browserDevicesUiState by browserDevicesViewModel.uiState.collectAsStateWithLifecycle()
     val serverProfiles = sessionStore.profiles()
     val activeServerName = serverProfiles.firstOrNull { it.id == profileId }?.serverAddress?.let(::defaultProfileName) ?: "当前服务器"
     var lanOpen by rememberSaveable(profileId) { mutableStateOf(false) }
@@ -276,6 +283,9 @@ private fun PairingContent(
     LifecycleStartEffect(timelineViewModel) {
         timelineViewModel.start()
         onStopOrDispose { timelineViewModel.stop() }
+    }
+    LaunchedEffect(timelineUiState.deviceListRevision) {
+        if (timelineUiState.deviceListRevision > 0) browserDevicesViewModel.refresh()
     }
 
     if (pairingUiState.screen == com.transdot.transferassistant.ui.PairingScreen.Home) {
@@ -310,6 +320,7 @@ private fun PairingContent(
             )
         } else TimelineScreen(
             state = timelineUiState,
+            browserDevicesState = browserDevicesUiState,
             ownDeviceId = pairingUiState.deviceId,
             themeMode = themeMode,
             appSettings = appSettings,
@@ -347,6 +358,10 @@ private fun PairingContent(
             onClearHighlight = timelineViewModel::clearHighlight,
             onClearError = timelineViewModel::clearError,
             onPairWindows = pairingViewModel::openScanner,
+            onRefreshBrowserDevices = browserDevicesViewModel::refresh,
+            onRenameBrowserDevice = browserDevicesViewModel::rename,
+            onRevokeBrowserDevice = browserDevicesViewModel::revoke,
+            onClearBrowserDeviceError = browserDevicesViewModel::clearError,
             onOpenLanTransfer = { lanOpen = true },
         )
     } else {
@@ -359,6 +374,8 @@ private fun PairingContent(
             onSubmitCode = pairingViewModel::submitManualCode,
             onQRCode = pairingViewModel::onQRCodeScanned,
             onScannerError = pairingViewModel::reportScannerError,
+            onConfirmBrowserPairing = pairingViewModel::confirmBrowserPairing,
+            onCancelBrowserPairing = pairingViewModel::cancelBrowserPairing,
             onConfirmReplacement = pairingViewModel::confirmReplacement,
             onCancelReplacement = pairingViewModel::cancelReplacement,
             onConfirmBootstrap = pairingViewModel::confirmBootstrap,

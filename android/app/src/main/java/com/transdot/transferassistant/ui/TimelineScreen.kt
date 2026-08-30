@@ -183,6 +183,7 @@ private fun ActionNoticeOverlay(notice: ActionNotice?, modifier: Modifier = Modi
 @Composable
 fun TimelineScreen(
     state: TimelineUiState,
+    browserDevicesState: BrowserDevicesUiState,
     ownDeviceId: String,
     themeMode: ThemeMode,
     appSettings: AppSettings,
@@ -220,12 +221,17 @@ fun TimelineScreen(
     onClearHighlight: () -> Unit,
     onClearError: () -> Unit,
     onPairWindows: () -> Unit,
+    onRefreshBrowserDevices: () -> Unit,
+    onRenameBrowserDevice: (String, String) -> Unit,
+    onRevokeBrowserDevice: (String) -> Unit,
+    onClearBrowserDeviceError: () -> Unit,
     onOpenLanTransfer: () -> Unit,
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     var attachmentSheet by remember { mutableStateOf(false) }
     var settingsSheet by remember { mutableStateOf(false) }
+    var browserDevicesSheet by remember { mutableStateOf(false) }
     var viewer by remember { mutableStateOf<ViewerState?>(null) }
     var pendingDownload by remember { mutableStateOf<TimelineMessage?>(null) }
     var pendingSaveLocationUri by remember { mutableStateOf<Uri?>(null) }
@@ -397,6 +403,9 @@ fun TimelineScreen(
             activeProfileId = activeProfileId,
             connection = state.connectionState,
             transferBusy = state.isUploading || state.downloadMessageId != null,
+            browserDeviceCount = browserDevicesState.devices.size,
+            browserDeviceMaximum = browserDevicesState.maximumCount,
+            browserDevicesSupported = browserDevicesState.supported,
             onChange = onThemeModeChange,
             onChooseDefaultFolder = { chooseDefaultFolder.launch(appSettings.defaultSaveTreeUri?.let(Uri::parse)) },
             onClearDefaultFolder = { onDefaultSaveTreeChanged(null) },
@@ -405,7 +414,18 @@ fun TimelineScreen(
             onSwitchServer = onSwitchServer,
             onRenameServer = onRenameServer,
             onDeleteServer = onDeleteServer,
+            onOpenBrowserDevices = { settingsSheet = false; browserDevicesSheet = true },
             onDismiss = { settingsSheet = false },
+        )
+    }
+    if (browserDevicesSheet) {
+        BrowserDevicesSheet(
+            state = browserDevicesState,
+            onRefresh = onRefreshBrowserDevices,
+            onRename = onRenameBrowserDevice,
+            onRevoke = onRevokeBrowserDevice,
+            onClearError = onClearBrowserDeviceError,
+            onDismiss = { browserDevicesSheet = false },
         )
     }
     state.completedDownload?.let { completed ->
@@ -762,7 +782,7 @@ internal fun TimelineTopBar(
         }
         AppIconButton(
             iconRes = R.drawable.ic_qr_code,
-            contentDescription = "配对 Windows",
+            contentDescription = "添加浏览器",
             onClick = onPairWindows,
         )
         AppIconButton(

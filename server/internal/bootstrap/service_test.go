@@ -28,6 +28,10 @@ func TestBootstrapClaimIsSingleUseAndCreatesMaster(t *testing.T) {
 	if claimed.MasterToken == "" || claimed.DeviceID == "" {
 		t.Fatalf("invalid claim: %#v", claimed)
 	}
+	var masterName string
+	if err := db.QueryRow(`SELECT display_name FROM devices WHERE id = ?`, claimed.DeviceID).Scan(&masterName); err != nil || masterName != "Android Master" {
+		t.Fatalf("master display name = %q, %v", masterName, err)
+	}
 	if _, err := service.Claim(context.Background(), session.ID, session.Secret); !errors.Is(err, ErrConsumed) && !errors.Is(err, ErrAlreadyInitialized) {
 		t.Fatalf("second claim error = %v", err)
 	}
@@ -38,6 +42,10 @@ func TestBootstrapClaimIsSingleUseAndCreatesMaster(t *testing.T) {
 	}
 	if poll.Status != StatusApproved || poll.BrowserToken == "" {
 		t.Fatalf("poll = %#v", poll)
+	}
+	var browserName string
+	if err := db.QueryRow(`SELECT display_name FROM devices WHERE token_hash = (SELECT browser_token_hash FROM bootstrap_sessions WHERE id = ?)`, session.ID).Scan(&browserName); err != nil || browserName != "浏览器设备" {
+		t.Fatalf("browser display name = %q, %v", browserName, err)
 	}
 }
 

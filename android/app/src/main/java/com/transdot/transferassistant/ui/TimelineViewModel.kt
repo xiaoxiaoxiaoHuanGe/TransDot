@@ -55,6 +55,7 @@ data class TimelineUiState(
     val downloadMessageId: String? = null,
     val downloadProgress: Float? = null,
     val completedDownload: CompletedDownload? = null,
+    val deviceListRevision: Int = 0,
 )
 
 class TimelineViewModel(
@@ -406,6 +407,23 @@ class TimelineViewModel(
                 })
             }
             TimelineEvent.DeviceReplaced -> markCredentialInvalid("此设备已被替换。")
+            is TimelineEvent.DeviceListChanged -> mutableUiState.update { state ->
+                val renamedMessages = if (event.deviceID != null && event.displayName != null) {
+                    state.messages.map { message ->
+                        if (message.sourceDeviceId == event.deviceID) message.copy(sourceDeviceName = event.displayName) else message
+                    }
+                } else state.messages
+                val renamedSearchResults = if (event.deviceID != null && event.displayName != null) {
+                    state.searchResults.map { message ->
+                        if (message.sourceDeviceId == event.deviceID) message.copy(sourceDeviceName = event.displayName) else message
+                    }
+                } else state.searchResults
+                state.copy(
+                    messages = renamedMessages,
+                    searchResults = renamedSearchResults,
+                    deviceListRevision = state.deviceListRevision + 1,
+                )
+            }
             TimelineEvent.Unknown -> Unit
         }
     }

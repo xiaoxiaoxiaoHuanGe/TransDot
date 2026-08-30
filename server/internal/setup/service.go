@@ -86,8 +86,8 @@ func (s *Service) Claim(ctx context.Context, providedSetupToken string) (ClaimRe
 	}
 
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO devices (id, device_type, token_hash)
-		VALUES (?, 'android_master', ?)
+		INSERT INTO devices (id, device_type, token_hash, display_name)
+		VALUES (?, 'android_master', ?, 'Android Master')
 	`, deviceID, masterTokenHash[:]); err != nil {
 		return ClaimResult{}, fmt.Errorf("create android master device: %w", err)
 	}

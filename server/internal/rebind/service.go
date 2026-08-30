@@ -161,7 +161,7 @@ func (s *Service) Claim(ctx context.Context, sessionID, secret, instanceID strin
 	}
 	deviceID := uuid.NewString()
 	masterHash := sha256.Sum256([]byte(masterToken))
-	if _, err = tx.ExecContext(ctx, `INSERT INTO devices(id, device_type, token_hash) VALUES (?, 'android_master', ?)`, deviceID, masterHash[:]); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO devices(id, device_type, token_hash, display_name) VALUES (?, 'android_master', ?, 'Android Master')`, deviceID, masterHash[:]); err != nil {
 		return ClaimResult{}, err
 	}
 	result, err := tx.ExecContext(ctx, `UPDATE rebind_sessions SET status='consumed', consumed_at=? WHERE id=? AND status='pending'`, now, sessionID)

@@ -1,4 +1,4 @@
-# TransDot 传输助手 v1.1.0
+# TransDot 传输助手 v1.2.0
 
 TransDot 是一个自托管的 Android 与 Web 文件传输工具。服务端、SQLite 数据库、消息和上传文件都保存在你自己的 Docker 数据卷中，不需要注册账号或接入第三方云盘。
 
@@ -6,6 +6,7 @@ TransDot 是一个自托管的 Android 与 Web 文件传输工具。服务端、
 
 - Android 与 Web 在同一条时间线中收发文字、图片和文件。
 - Web 支持选择、拖放和粘贴文件，支持搜索、批量选择与批量保存。
+- 同一服务器可同时授权多个浏览器；Android 可查看、重命名和逐个撤销浏览器授权。
 - Android 支持多个服务器档案、默认保存目录、传输通知和自动接收。
 - 首次部署通过 Web 二维码绑定 Android Master，无需手动输入密钥。
 - APP 重装后可在 Web 点击“重新绑定手机”，新 APP 扫码后自动恢复连接；旧手机凭据立即失效。
@@ -131,9 +132,11 @@ Invoke-RestMethod http://localhost:5757/healthz
 ## 浏览器配对
 
 1. 未配对浏览器打开服务器地址，页面显示二维码和 6 位备用码。
-2. Android APP 点击“配对 Windows”。
+2. Android APP 点击“添加浏览器”。
 3. 扫描二维码或输入备用码。
-4. 替换已有浏览器时，需要在 Android 端明确确认。
+4. 核对浏览器名称并点击“添加浏览器”；新增授权不会使其他浏览器退出。
+
+默认最多同时授权 10 个浏览器，可通过 `MAX_BROWSER_DEVICES` 在 1–50 范围内调整。Android 设置页的“已授权浏览器”可查看授权时间和最近活动、重命名或撤销单个浏览器；浏览器设置中只能修改自己的名称。达到上限时，先在 Android 撤销一个不再使用的设备，再重新配对。
 
 ## 局域网快传
 
@@ -166,11 +169,12 @@ Invoke-RestMethod http://localhost:5757/healthz
 | `FILE_TTL_HOURS` | 24，原文件保留时间 |
 | `FILE_MESSAGE_TTL_DAYS` | 30，缩略图与文件消息保留时间 |
 | `PAIRING_TTL_SECONDS` | 120，二维码/配对码有效期 |
+| `MAX_BROWSER_DEVICES` | 10，活动浏览器授权上限（范围 1–50） |
 | `UPLOAD_SESSION_TTL_MINUTES` | 30，未完成上传会话有效期 |
 
 服务每 5 分钟清理过期上传、临时文件和过期内容。局域网快传不占用云端文件池。
 
-## 更新、日志与备份
+## 更新、日志、备份与恢复
 
 普通更新：
 
@@ -201,7 +205,41 @@ cd /opt/transdot
 sh docker/reset.sh RESET
 ```
 
-备份或迁移时应备份完整 Docker 卷 `transfer-assistant-data`，仅备份 Git 仓库不能恢复运行数据。
+### 创建一致性备份
+
+备份脚本会短暂停止应用，校验只读数据库与文件，生成带 `manifest.json` 的归档和相邻 SHA-256 文件，然后恢复执行前的服务状态：
+
+```bash
+cd /opt/transdot
+sh docker/backup.sh /opt/transdot-backups
+```
+
+归档包含服务器身份、设备授权、消息、原始文件和缩略图，不包含 `.env`、证书或 `data/tmp`。文件权限为 `0600`，其中仍含私人消息和不可逆 Token 哈希，建议保存到加密磁盘。启用 `age` 加密时先安装 `age`，再设置收件人；未安装会明确失败，不会降级为明文：
+
+```bash
+AGE_RECIPIENT='age1...' sh docker/backup.sh /opt/transdot-backups
+```
+
+定时任务可直接调用相同命令。默认永不删除旧备份；显式添加 `--keep 7` 才会保留最新 7 份脚本生成的常规备份。
+
+### 验证与恢复
+
+恢复会先校验 SHA-256、归档路径/类型、manifest、schema、SQLite 和文件大小，并在暂存卷通过检查。覆盖固定生产卷前必定创建 `pre-restore-*` 安全备份；目标启动失败时会自动回滚。最后一个参数必须是独立的 `RESTORE`：
+
+```bash
+cd /opt/transdot
+sh docker/restore.sh /opt/transdot-backups/transdot-backup-20260830T112233Z-7F3A91C2.tar.gz RESTORE
+```
+
+恢复是完整覆盖到备份时间点，不会合并消息；当前 `.env` 保持不变。加密归档恢复需设置 `AGE_IDENTITY_FILE`。不要把 Restore 与 Reset 混淆：Restore 有校验、安全备份和回滚，Reset 会永久创建全新实例。
+
+需要只读诊断当前数据卷时，可在服务停止后运行镜像内维护工具：
+
+```bash
+docker run --rm --user 0 --entrypoint /app/transdot-maintenance \
+  -v transfer-assistant-data:/app/data:ro transfer-assistant:local \
+  verify --data-dir /app/data --max-schema 11 --json
+```
 
 ## 开发与验证
 

@@ -24,13 +24,14 @@ func browserSession(authService deviceAuthenticator, logger *slog.Logger) http.H
 			return
 		}
 		device, err := authService.Authenticate(r.Context(), cookie.Value, deviceauth.WindowsBrowser)
-		if !handleAuthenticationError(w, err, logger) {
+		if !handleBrowserAuthenticationError(w, err, logger) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"authenticated": true,
 			"device_id":     device.ID,
 			"device_type":   device.Type,
+			"display_name":  device.DisplayName,
 		})
 	}
 }
@@ -56,10 +57,17 @@ func authenticateDevice(w http.ResponseWriter, r *http.Request, authService devi
 		return deviceauth.Device{}, false
 	}
 	device, err := authService.Authenticate(r.Context(), cookie.Value, deviceauth.WindowsBrowser)
-	if !handleAuthenticationError(w, err, logger) {
+	if !handleBrowserAuthenticationError(w, err, logger) {
 		return deviceauth.Device{}, false
 	}
 	return device, true
+}
+
+func handleBrowserAuthenticationError(w http.ResponseWriter, err error, logger *slog.Logger) bool {
+	if errors.Is(err, deviceauth.ErrDeviceRevoked) {
+		clearBrowserCookie(w)
+	}
+	return handleAuthenticationError(w, err, logger)
 }
 
 func authenticateMaster(w http.ResponseWriter, r *http.Request, authService deviceAuthenticator, logger *slog.Logger) (deviceauth.Device, bool) {
@@ -101,5 +109,12 @@ func setBrowserCookie(w http.ResponseWriter, token string) {
 		HttpOnly: true,
 		Secure:   true,
 		SameSite: http.SameSiteStrictMode,
+	})
+}
+
+func clearBrowserCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name: browserCookieName, Value: "", Path: "/", MaxAge: -1,
+		Expires: time.Unix(1, 0).UTC(), HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode,
 	})
 }

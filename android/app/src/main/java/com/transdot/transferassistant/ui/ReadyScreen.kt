@@ -108,7 +108,7 @@ fun ReadyScreen(serverAddress: String, deviceId: String, onPairWindows: () -> Un
                         .height(56.dp),
                     shape = MaterialTheme.shapes.medium,
                 ) {
-                    Text("配对 Windows")
+                    Text("添加浏览器")
                 }
             }
         }

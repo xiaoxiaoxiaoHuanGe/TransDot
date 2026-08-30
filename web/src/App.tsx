@@ -4,6 +4,16 @@ import { LanTransferView } from './lan/LanTransferView'
 import { instanceHostLabel, pairingTransportGuidance, parseRetryAfterSeconds, unauthenticatedFlow } from './pairingPolicy'
 import { RebindStatus, rebindScreenForStatus } from './rebindPolicy'
 import { DownloadDirectory, downloadFilesToDirectory, fileFingerprint, partitionRepeatedFiles } from './transferTools'
+import {
+  defaultBrowserDeviceName,
+  applyDeviceDisplayName,
+  defaultDeviceName,
+  deviceNameStorageKey,
+  isRevocationEvent,
+  normalizeDeviceName,
+  pairingFailureMessage,
+  sourceDeviceLabel,
+} from './deviceManagement'
 
 type PairingStatus = 'pending' | 'approved' | 'rejected' | 'expired' | 'consumed'
 type ScreenState = 'loading' | 'bootstrap' | 'pairing' | 'rebind' | 'paired' | 'rejected' | 'expired' | 'replaced' | 'insecure' | 'error'
@@ -15,6 +25,7 @@ type PairingSession = {
   qr_payload: string
   expires_at: string
   poll_interval_seconds: number
+  device_name?: string
 }
 
 type BootstrapSession = {
@@ -43,6 +54,7 @@ type AuthSession = {
   authenticated: boolean
   device_id: string
   device_type: 'windows_browser'
+  display_name?: string
 }
 
 type TimelineMessage = {
@@ -51,6 +63,7 @@ type TimelineMessage = {
   batch_id: string | null
   source_device_id: string
   source_device_type: 'android_master' | 'windows_browser'
+  source_device_name?: string
   text_content: string | null
   created_at: string
   metadata_expires_at: string | null
@@ -105,7 +118,7 @@ type MessagePage = {
 
 type RealtimeEnvelope = {
   event_id: string
-  type: 'message.created' | 'message.deleted' | 'device.replaced' | string
+  type: 'message.created' | 'message.deleted' | 'device.revoked' | 'device.replaced' | 'device.updated' | string
   timestamp: string
   data: unknown
 }
@@ -238,6 +251,19 @@ function isPreviewableImage(file: File) {
   return ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/bmp'].includes(file.type.toLowerCase())
 }
 
+function initialBrowserDeviceName() {
+  try {
+    const stored = window.localStorage.getItem(deviceNameStorageKey)
+    if (stored) return normalizeDeviceName(stored)
+  } catch {
+    // Storage can be unavailable in private or locked-down contexts.
+  }
+  const browserNavigator = navigator as Navigator & {
+    userAgentData?: { brands?: Array<{ brand: string }>, platform?: string }
+  }
+  return defaultBrowserDeviceName({ userAgent: browserNavigator.userAgent, userAgentData: browserNavigator.userAgentData })
+}
+
 function App() {
   const [screen, setScreen] = useState<ScreenState>('loading')
   const [session, setSession] = useState<PairingSession | null>(null)
@@ -249,6 +275,7 @@ function App() {
   const [retryBootstrap, setRetryBootstrap] = useState(false)
   const [retryRebind, setRetryRebind] = useState(false)
   const [now, setNow] = useState(() => Date.now())
+  const [deviceName, setDeviceName] = useState(initialBrowserDeviceName)
   const creatingSessionRef = useRef(false)
 
   const createBootstrapSession = useCallback(async (signal?: AbortSignal) => {
@@ -275,7 +302,7 @@ function App() {
     } finally { creatingSessionRef.current = false }
   }, [])
 
-  const createSession = useCallback(async (signal?: AbortSignal) => {
+  const createSession = useCallback(async (signal?: AbortSignal, requestedDeviceName = deviceName) => {
     setRetryRebind(false)
     setRetryBootstrap(false)
     if (creatingSessionRef.current) return
@@ -298,13 +325,16 @@ function App() {
       const nextSession = await request<PairingSession>('/api/v1/pairing/sessions', {
         method: 'POST',
         signal,
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({ device_name: requestedDeviceName }),
       })
       setSession(nextSession)
       setNow(Date.now())
       setScreen('pairing')
     } catch (error) {
       if (isAbort(error)) return
-      setErrorMessage(error instanceof Error ? error.message : '无法创建配对会话。')
+      const capacityGuidance = error instanceof ApiError ? pairingFailureMessage(error.code) : undefined
+      setErrorMessage(capacityGuidance || (error instanceof Error ? error.message : '无法创建配对会话。'))
       setRetryAfterSeconds(error instanceof ApiError && error.status === httpStatusTooManyRequests
         ? error.retryAfterSeconds ?? 120
         : 0)
@@ -312,7 +342,19 @@ function App() {
     } finally {
       creatingSessionRef.current = false
     }
-  }, [])
+  }, [deviceName])
+
+  const renamePairingDevice = useCallback((value: string) => {
+    const normalized = normalizeDeviceName(value)
+    setDeviceName(normalized)
+    try {
+      window.localStorage.setItem(deviceNameStorageKey, normalized)
+    } catch {
+      // The server remains the source of truth when local storage is unavailable.
+    }
+    setSession(null)
+    void createSession(undefined, normalized)
+  }, [createSession])
 
   const enterTimeline = useCallback(async (signal?: AbortSignal) => {
     const authenticated = await request<AuthSession>('/api/v1/auth/session', { signal })
@@ -344,6 +386,11 @@ function App() {
     const controller = new AbortController()
     enterTimeline(controller.signal).catch((error: unknown) => {
       if (isAbort(error)) return
+      if (error instanceof ApiError && error.code === 'DEVICE_REVOKED') {
+        setAuthSession(null)
+        setScreen('replaced')
+        return
+      }
       if (error instanceof ApiError && error.status === 401) {
         request<InstanceInfo>('/api/v1/instance/info', { signal: controller.signal })
           .then((info) => unauthenticatedFlow(info.initialized) === 'bootstrap'
@@ -472,7 +519,7 @@ function App() {
           {screen === 'bootstrap' ? '等待手机绑定'
             : screen === 'pairing' ? '等待手机确认'
             : screen === 'rebind' ? '等待手机重绑定'
-            : screen === 'replaced' ? '浏览器已被替换'
+            : screen === 'replaced' ? '浏览器授权已撤销'
               : screen === 'insecure' ? '需要 HTTPS'
                 : '安全连接'}
         </span>
@@ -481,7 +528,7 @@ function App() {
       <main className="content">
         {screen === 'loading' && <LoadingState />}
         {screen === 'pairing' && session && (
-          <PairingCard session={session} secondsRemaining={secondsRemaining} />
+          <PairingCard session={session} secondsRemaining={secondsRemaining} onRename={renamePairingDevice} />
         )}
         {screen === 'bootstrap' && bootstrapSession && (
           <BootstrapCard session={bootstrapSession} secondsRemaining={secondsRemaining} />
@@ -499,13 +546,13 @@ function App() {
             title={
               screen === 'expired' ? '配对码已过期'
                 : screen === 'rejected' ? '手机已拒绝配对'
-                  : screen === 'replaced' ? '这台 Windows 已被替换'
+                  : screen === 'replaced' ? '这台浏览器的授权已失效'
                     : screen === 'insecure' ? '此地址无法安全配对'
                     : '暂时无法连接'
             }
             message={
               (screen === 'error' || screen === 'insecure') ? errorMessage
-                : screen === 'replaced' ? 'Android Master 已授权另一台 Windows。重新配对会再次请求手机确认。'
+                : screen === 'replaced' ? 'Android Master 已撤销这台浏览器。重新配对会再次请求手机确认。'
                   : '生成新的二维码后，再用 Android Master 扫描确认。'
             }
             onRetry={() => void (retryBootstrap ? createBootstrapSession() : retryRebind ? createRebindSession() : createSession())}
@@ -541,6 +588,10 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
   const [deleteTargets, setDeleteTargets] = useState<TimelineMessage[]>([])
   const [deleting, setDeleting] = useState(false)
   const [actionNotice, setActionNotice] = useState('')
+  const [currentDeviceName, setCurrentDeviceName] = useState(authSession.display_name?.trim() || defaultDeviceName)
+  const [deviceNameOpen, setDeviceNameOpen] = useState(false)
+  const [deviceNameDraft, setDeviceNameDraft] = useState(authSession.display_name?.trim() || defaultDeviceName)
+  const [savingDeviceName, setSavingDeviceName] = useState(false)
   const [attachmentOpen, setAttachmentOpen] = useState(false)
   const [pendingUploads, setPendingUploads] = useState<PendingUpload[]>([])
   const [pasteDuplicates, setPasteDuplicates] = useState<{ fresh: File[], repeated: File[] } | null>(null)
@@ -636,10 +687,20 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
         setMessages(expire)
         setSearchResults(expire)
       }
-    } else if (event.type === 'device.replaced') {
+    } else if (isRevocationEvent(event.type, event.data, authSession.device_id)) {
       onSessionInvalid()
+    } else if (event.type === 'device.updated') {
+      const update = event.data as { id?: unknown, display_name?: unknown }
+      if (typeof update.id === 'string' && typeof update.display_name === 'string') {
+        setMessages((current) => applyDeviceDisplayName(current, update.id as string, update.display_name as string))
+        setSearchResults((current) => applyDeviceDisplayName(current, update.id as string, update.display_name as string))
+      }
+      if (update.id === authSession.device_id && typeof update.display_name === 'string') {
+        setCurrentDeviceName(update.display_name)
+        setDeviceNameDraft(update.display_name)
+      }
     }
-  }, [acceptCreatedMessage, onSessionInvalid])
+  }, [acceptCreatedMessage, authSession.device_id, onSessionInvalid])
 
   const loadLatest = useCallback(async (signal?: AbortSignal) => {
     synchronizingRef.current = true
@@ -698,7 +759,7 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
       socket.onmessage = (messageEvent) => {
         try {
           const event = JSON.parse(String(messageEvent.data)) as RealtimeEnvelope
-          if (event.type === 'device.replaced') {
+          if (isRevocationEvent(event.type, event.data, authSession.device_id)) {
             disposed = true
             socket?.close()
             applyRealtimeEvent(event)
@@ -857,6 +918,35 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
   }, [highlightedID])
 
   const draftBytes = new TextEncoder().encode(draft).length
+
+  const saveDeviceName = async (event: FormEvent) => {
+    event.preventDefault()
+    if (savingDeviceName) return
+    let normalized: string
+    try {
+      normalized = normalizeDeviceName(deviceNameDraft)
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : '设备名称无效。')
+      return
+    }
+    setSavingDeviceName(true)
+    try {
+      const updated = await request<{ display_name: string }>('/api/v1/devices/self', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({ display_name: normalized }),
+      })
+      setCurrentDeviceName(updated.display_name)
+      setDeviceNameDraft(updated.display_name)
+      try { window.localStorage.setItem(deviceNameStorageKey, updated.display_name) } catch { /* optional cache */ }
+      setDeviceNameOpen(false)
+      setActionNotice('本设备名称已更新')
+    } catch (error) {
+      if (!handleAuthError(error)) setErrorMessage(error instanceof Error ? error.message : '无法修改设备名称。')
+    } finally {
+      setSavingDeviceName(false)
+    }
+  }
 
   const updatePending = useCallback((id: string, update: Partial<PendingUpload>) => {
     setPendingUploads((current) => current.map((item) => item.id === id ? { ...item, ...update } : item))
@@ -1078,6 +1168,9 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
           </div>
         </div>
         <div className="timeline-actions">
+          <button className="batch-action device-name-command" type="button" onClick={() => setDeviceNameOpen(true)}>
+            本设备：{currentDeviceName}
+          </button>
           <button className="batch-action" type="button" onClick={onRebindPhone}>重新绑定手机</button>
           <button className="batch-action lan-mode-command" type="button" onClick={() => setLanOpen(true)}>
             <LanTransferIcon /><span>局域网快传</span>
@@ -1143,7 +1236,7 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
                     className={`message-row ${group.kind === 'images' ? 'message-row--images' : ''} ${own ? 'message-row--own' : ''} ${group.messages.some((item) => highlightedID === item.id) ? 'message-row--highlighted' : ''}`}
                   >
                     <div className="message-meta">
-                      <span>{message.source_device_type === 'android_master' ? 'Android' : 'Windows'}</span>
+                      <span>{sourceDeviceLabel(message, authSession.device_id)}</span>
                       <time dateTime={message.created_at}>{formatMessageTime(message.created_at)}</time>
                     </div>
                     <div className="message-body-line">
@@ -1222,6 +1315,21 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
       <input ref={photoInputRef} className="visually-hidden" type="file" accept="image/*" multiple onChange={handleFileInput} />
       <input ref={fileInputRef} className="visually-hidden" type="file" multiple onChange={handleFileInput} />
 
+      {deviceNameOpen && (
+        <div className="sheet-backdrop sheet-backdrop--center" role="presentation" onMouseDown={() => setDeviceNameOpen(false)}>
+          <form className="confirm-dialog device-name-dialog" role="dialog" aria-modal="true" aria-labelledby="device-name-title" onSubmit={(event) => void saveDeviceName(event)} onMouseDown={(event) => event.stopPropagation()}>
+            <h2 id="device-name-title">本设备名称</h2>
+            <p>名称会显示在 Android 的已授权浏览器列表和时间线来源中。</p>
+            <label htmlFor="device-name-input">设备名称</label>
+            <input id="device-name-input" value={deviceNameDraft} onChange={(event) => setDeviceNameDraft(event.target.value)} maxLength={64} autoFocus />
+            <div>
+              <button type="button" onClick={() => { setDeviceNameDraft(currentDeviceName); setDeviceNameOpen(false) }} disabled={savingDeviceName}>取消</button>
+              <button className="primary-button" type="submit" disabled={savingDeviceName || !deviceNameDraft.trim()}>{savingDeviceName ? '保存中…' : '保存'}</button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {dragging && (
         <div className="drop-zone" aria-hidden="true">
           <div><strong>松开即可上传</strong><span>最多 20 项 · 单批 500 MB</span></div>
@@ -1257,7 +1365,7 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
               ) : searchResults.map((message) => (
                 <button key={message.id} className="search-result" type="button" onClick={() => void locateSearchResult(message.id)}>
                   <span>{message.text_content || message.file?.original_filename || '文件消息'}</span>
-                  <small>{message.source_device_type === 'android_master' ? 'Android' : 'Windows'} · {formatMessageTime(message.created_at)}</small>
+                  <small>{sourceDeviceLabel(message, authSession.device_id)} · {formatMessageTime(message.created_at)}</small>
                 </button>
               ))}
             </div>
@@ -1542,16 +1650,30 @@ function LoadingState() {
   )
 }
 
-function PairingCard({ session, secondsRemaining }: { session: PairingSession, secondsRemaining: number }) {
+function PairingCard({ session, secondsRemaining, onRename }: { session: PairingSession, secondsRemaining: number, onRename: (name: string) => void }) {
+  const [editingName, setEditingName] = useState(false)
+  const [nameDraft, setNameDraft] = useState(session.device_name || defaultDeviceName)
+  const [nameError, setNameError] = useState('')
+  const submitName = (event: FormEvent) => {
+    event.preventDefault()
+    try {
+      const normalized = normalizeDeviceName(nameDraft)
+      setNameError('')
+      setEditingName(false)
+      onRename(normalized)
+    } catch (error) {
+      setNameError(error instanceof Error ? error.message : '设备名称无效。')
+    }
+  }
   return (
     <section className="pairing-layout" aria-labelledby="pairing-title">
       <div className="pairing-copy">
         <p className="eyebrow">WINDOWS PAIRING</p>
         <h1 id="pairing-title">用手机确认这台电脑</h1>
-        <p className="lead">打开 Android Master，点击“配对 Windows”并扫描二维码。二维码只在本次会话中有效。</p>
+        <p className="lead">打开 Android Master，点击“添加浏览器”并扫描二维码。二维码只在本次会话中有效。</p>
         <ol className="steps">
           <li><span>1</span>打开手机上的传输助手</li>
-          <li><span>2</span>点击“配对 Windows”</li>
+          <li><span>2</span>点击“添加浏览器”</li>
           <li><span>3</span>扫描右侧二维码并确认</li>
         </ol>
         <div className="privacy-note">
@@ -1561,6 +1683,20 @@ function PairingCard({ session, secondsRemaining }: { session: PairingSession, s
       </div>
 
       <div className="qr-card">
+        <div className="pairing-device-name">
+          <span>设备名称</span>
+          {editingName ? (
+            <form onSubmit={submitName}>
+              <label className="visually-hidden" htmlFor="pairing-device-name">设备名称</label>
+              <input id="pairing-device-name" value={nameDraft} onChange={(event) => setNameDraft(event.target.value)} maxLength={64} autoFocus />
+              <button type="submit">重新生成</button>
+              <button type="button" onClick={() => { setNameDraft(session.device_name || defaultDeviceName); setNameError(''); setEditingName(false) }}>取消</button>
+            </form>
+          ) : (
+            <div><strong>{session.device_name || defaultDeviceName}</strong><button type="button" onClick={() => setEditingName(true)}>修改</button></div>
+          )}
+          {nameError && <small role="alert">{nameError}</small>}
+        </div>
         <div className="qr-frame" aria-label="Windows 配对二维码">
           <QRCodeSVG value={session.qr_payload} size={232} level="M" marginSize={2} bgColor="#ffffff" fgColor="#14171c" />
         </div>

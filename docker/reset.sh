@@ -1,6 +1,11 @@
 #!/bin/sh
 set -eu
 
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+. "$SCRIPT_DIR/maintenance-common.sh"
+LOCK_OWNED=0
+trap 'release_lock' EXIT HUP INT TERM
+
 PROJECT_DIR=${TRANSDOT_PROJECT_DIR:-/opt/transdot}
 PROJECT_NAME=transdot
 VOLUME_NAME=transfer-assistant-data
@@ -15,6 +20,9 @@ if [ ! -f "$PROJECT_DIR/docker-compose.yml" ]; then
   echo "TransDot compose file not found in $PROJECT_DIR" >&2
   exit 1
 fi
+
+
+acquire_lock
 
 cd "$PROJECT_DIR"
 if docker ps -a --filter "label=com.docker.compose.project=transfer-assistant" --format '{{.ID}}' | grep -q .; then

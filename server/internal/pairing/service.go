@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"transdot.local/transfer-assistant/server/internal/devices"
 )
 
 const (
@@ -36,6 +38,7 @@ var (
 	ErrInvalidPairing      = errors.New("pairing credential is invalid")
 	ErrPairingExpired      = errors.New("pairing session is expired")
 	ErrReplacementRequired = errors.New("an active Windows browser must be replaced")
+	ErrBrowserLimitReached  = errors.New("maximum active browser device count reached")
 )
 
 type Session struct {
@@ -44,6 +47,7 @@ type Session struct {
 	QRSecret     string
 	BrowserToken string
 	ExpiresAt    time.Time
+	DeviceName   string
 }
 
 type Credential struct {
@@ -62,18 +66,19 @@ type Service struct {
 	ttl              time.Duration
 	random           io.Reader
 	now              func() time.Time
-	onDevicesRevoked func([]string)
+	maxBrowsers      int
+	publish          func(string, any)
 }
 
-func NewService(db *sql.DB, ttl time.Duration, onDevicesRevoked ...func([]string)) *Service {
-	service := &Service{db: db, ttl: ttl, random: cryptorand.Reader, now: time.Now}
-	if len(onDevicesRevoked) > 0 {
-		service.onDevicesRevoked = onDevicesRevoked[0]
+func NewService(db *sql.DB, ttl time.Duration, maxBrowsers int, publish func(string, any)) *Service {
+	return &Service{db: db, ttl: ttl, random: cryptorand.Reader, now: time.Now, maxBrowsers: maxBrowsers, publish: publish}
+}
+
+func (s *Service) Create(ctx context.Context, deviceName string) (Session, error) {
+	deviceName, err := devices.NormalizeDisplayName(deviceName)
+	if err != nil {
+		return Session{}, err
 	}
-	return service
-}
-
-func (s *Service) Create(ctx context.Context) (Session, error) {
 	now := s.now().UTC()
 	if err := s.expireOldSessions(ctx, now); err != nil {
 		return Session{}, err
@@ -113,15 +118,16 @@ func (s *Service) Create(ctx context.Context) (Session, error) {
 			QRSecret:     qrSecret,
 			BrowserToken: browserToken,
 			ExpiresAt:    now.Add(s.ttl),
+			DeviceName:   deviceName,
 		}
 
 		_, err = s.db.ExecContext(ctx, `
 			INSERT INTO pairing_sessions (
 				id, code_hash, qr_secret_hash, browser_token_hash,
-				created_at, expires_at
-			) VALUES (?, ?, ?, ?, ?, ?)
+				created_at, expires_at, requested_device_name
+			) VALUES (?, ?, ?, ?, ?, ?, ?)
 		`, session.ID, codeHash[:], qrSecretHash[:], browserTokenHash[:],
-			formatTime(now), formatTime(session.ExpiresAt))
+			formatTime(now), formatTime(session.ExpiresAt), deviceName)
 		if err == nil {
 			return session, nil
 		}
@@ -133,7 +139,7 @@ func (s *Service) Create(ctx context.Context) (Session, error) {
 	return Session{}, errors.New("could not generate a unique pairing code")
 }
 
-func (s *Service) Approve(ctx context.Context, credential Credential, masterDeviceID string, replaceExisting bool) error {
+func (s *Service) Approve(ctx context.Context, credential Credential, masterDeviceID string, _ bool) error {
 	now := s.now().UTC()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -153,23 +159,16 @@ func (s *Service) Approve(ctx context.Context, credential Credential, masterDevi
 	`).Scan(&activeBrowsers); err != nil {
 		return fmt.Errorf("count active Windows browsers: %w", err)
 	}
-	if activeBrowsers > 0 && !replaceExisting {
-		return ErrReplacementRequired
+	if activeBrowsers >= s.maxBrowsers {
+		return ErrBrowserLimitReached
 	}
 
-	replacementAllowed := 0
-	if replaceExisting {
-		replacementAllowed = 1
-	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE pairing_sessions
 		SET status = 'approved',
-		    replacement_allowed = CASE
-		        WHEN replacement_allowed = 1 OR ? = 1 THEN 1 ELSE 0
-		    END,
 		    approved_by_device_id = ?, approved_at = ?
 		WHERE id = ? AND status IN ('pending', 'approved')
-	`, replacementAllowed, masterDeviceID, formatTime(now), session.id); err != nil {
+	`, masterDeviceID, formatTime(now), session.id); err != nil {
 		return fmt.Errorf("approve pairing session: %w", err)
 	}
 
@@ -220,15 +219,15 @@ func (s *Service) Poll(ctx context.Context, sessionID, browserToken string) (Pol
 
 	var status, expiresAtRaw string
 	var storedBrowserHash []byte
-	var replacementAllowed int
+	var requestedDeviceName string
 	var browserDeviceID sql.NullString
 	err = tx.QueryRowContext(ctx, `
 		SELECT status, expires_at, browser_token_hash,
-		       replacement_allowed, browser_device_id
+		       requested_device_name, browser_device_id
 		FROM pairing_sessions WHERE id = ?
 	`, sessionID).Scan(
 		&status, &expiresAtRaw, &storedBrowserHash,
-		&replacementAllowed, &browserDeviceID,
+		&requestedDeviceName, &browserDeviceID,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PollResult{}, ErrInvalidPairing
@@ -278,7 +277,7 @@ func (s *Service) Poll(ctx context.Context, sessionID, browserToken string) (Pol
 		}
 		return PollResult{Status: StatusApproved, BrowserToken: browserToken}, nil
 	case StatusApproved:
-		return s.consumeApprovedSession(ctx, tx, sessionID, providedHash[:], browserToken, replacementAllowed, now)
+		return s.consumeApprovedSession(ctx, tx, sessionID, providedHash[:], browserToken, requestedDeviceName, now)
 	default:
 		return PollResult{}, fmt.Errorf("unknown pairing status %q", status)
 	}
@@ -412,7 +411,7 @@ func (s *Service) consumeApprovedSession(
 	sessionID string,
 	browserTokenHash []byte,
 	browserToken string,
-	replacementAllowed int,
+	requestedDeviceName string,
 	now time.Time,
 ) (PollResult, error) {
 	var activeBrowsers int
@@ -422,56 +421,25 @@ func (s *Service) consumeApprovedSession(
 	`).Scan(&activeBrowsers); err != nil {
 		return PollResult{}, fmt.Errorf("count browsers during pairing consumption: %w", err)
 	}
-	if activeBrowsers > 0 && replacementAllowed != 1 {
+	if activeBrowsers >= s.maxBrowsers {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE pairing_sessions
 			SET status = 'rejected', rejected_at = ?
 			WHERE id = ? AND status = 'approved'
 		`, formatTime(now), sessionID); err != nil {
-			return PollResult{}, fmt.Errorf("reject unsafe browser replacement: %w", err)
+			return PollResult{}, fmt.Errorf("reject browser beyond device limit: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
-			return PollResult{}, fmt.Errorf("commit unsafe browser replacement rejection: %w", err)
+			return PollResult{}, fmt.Errorf("commit browser limit rejection: %w", err)
 		}
-		return PollResult{Status: StatusRejected}, nil
-	}
-
-	var revokedDeviceIDs []string
-	if activeBrowsers > 0 {
-		rows, err := tx.QueryContext(ctx, `
-			SELECT id FROM devices
-			WHERE device_type = 'windows_browser' AND revoked_at IS NULL
-		`)
-		if err != nil {
-			return PollResult{}, fmt.Errorf("query replaced Windows browsers: %w", err)
-		}
-		for rows.Next() {
-			var deviceID string
-			if err := rows.Scan(&deviceID); err != nil {
-				rows.Close()
-				return PollResult{}, fmt.Errorf("scan replaced Windows browser: %w", err)
-			}
-			revokedDeviceIDs = append(revokedDeviceIDs, deviceID)
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return PollResult{}, fmt.Errorf("iterate replaced Windows browsers: %w", err)
-		}
-		rows.Close()
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE devices
-			SET revoked_at = ?
-			WHERE device_type = 'windows_browser' AND revoked_at IS NULL
-		`, formatTime(now)); err != nil {
-			return PollResult{}, fmt.Errorf("revoke previous Windows browser: %w", err)
-		}
+		return PollResult{}, ErrBrowserLimitReached
 	}
 
 	browserDeviceID := uuid.NewString()
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO devices (id, device_type, token_hash)
-		VALUES (?, 'windows_browser', ?)
-	`, browserDeviceID, browserTokenHash); err != nil {
+		INSERT INTO devices (id, device_type, token_hash, display_name)
+		VALUES (?, 'windows_browser', ?, ?)
+	`, browserDeviceID, browserTokenHash, requestedDeviceName); err != nil {
 		return PollResult{}, fmt.Errorf("create Windows browser device: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -484,8 +452,8 @@ func (s *Service) consumeApprovedSession(
 	if err := tx.Commit(); err != nil {
 		return PollResult{}, fmt.Errorf("commit pairing consumption: %w", err)
 	}
-	if len(revokedDeviceIDs) > 0 && s.onDevicesRevoked != nil {
-		s.onDevicesRevoked(revokedDeviceIDs)
+	if s.publish != nil {
+		s.publish("device.created", map[string]string{"id": browserDeviceID, "display_name": requestedDeviceName})
 	}
 
 	return PollResult{Status: StatusApproved, BrowserToken: browserToken}, nil

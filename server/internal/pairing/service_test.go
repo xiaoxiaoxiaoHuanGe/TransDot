@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,15 +15,18 @@ import (
 
 func TestPairingApprovalCreatesAuthenticatedBrowser(t *testing.T) {
 	db := testDatabaseWithMaster(t)
-	service := NewService(db, 2*time.Minute)
+	service := NewService(db, 2*time.Minute, 10, nil)
 	ctx := context.Background()
 
-	session, err := service.Create(ctx)
+	session, err := service.Create(ctx, "Chrome · Windows")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 	if len(session.Code) != 6 || len(session.QRSecret) != 43 || len(session.BrowserToken) != 43 {
 		t.Fatalf("session secrets have unexpected lengths: %+v", session)
+	}
+	if session.DeviceName != "Chrome · Windows" {
+		t.Fatalf("DeviceName = %q", session.DeviceName)
 	}
 
 	pending, err := service.Poll(ctx, session.ID, session.BrowserToken)
@@ -51,11 +55,11 @@ func TestPairingApprovalCreatesAuthenticatedBrowser(t *testing.T) {
 	}
 }
 
-func TestPairingReplacementRevokesOldBrowserAtomically(t *testing.T) {
+func TestPairingAddsBrowsersWithoutReplacingExisting(t *testing.T) {
 	db := testDatabaseWithMaster(t)
-	var revokedDeviceIDs []string
-	service := NewService(db, 2*time.Minute, func(deviceIDs []string) {
-		revokedDeviceIDs = append(revokedDeviceIDs, deviceIDs...)
+	var events []string
+	service := NewService(db, 2*time.Minute, 10, func(eventType string, _ any) {
+		events = append(events, eventType)
 	})
 	ctx := context.Background()
 
@@ -69,24 +73,20 @@ func TestPairingReplacementRevokesOldBrowserAtomically(t *testing.T) {
 		t.Fatalf("authenticate first browser before replacement: %v", err)
 	}
 
-	second, err := service.Create(ctx)
+	second, err := service.Create(ctx, "Office")
 	if err != nil {
 		t.Fatalf("Create() second error = %v", err)
 	}
 	credential := Credential{Code: second.Code}
-	if err := service.Approve(ctx, credential, "master-1", false); !errors.Is(err, ErrReplacementRequired) {
-		t.Fatalf("Approve() error = %v, want ErrReplacementRequired", err)
-	}
 	if err := service.Approve(ctx, credential, "master-1", true); err != nil {
-		t.Fatalf("Approve(replace) error = %v", err)
+		t.Fatalf("Approve() error = %v", err)
 	}
 	if _, err := service.Poll(ctx, second.ID, second.BrowserToken); err != nil {
 		t.Fatalf("consume replacement browser: %v", err)
 	}
 
-	_, oldDeviceErr := authService.Authenticate(ctx, first.BrowserToken, deviceauth.WindowsBrowser)
-	if !errors.Is(oldDeviceErr, deviceauth.ErrDeviceRevoked) {
-		t.Fatalf("old browser auth error = %v, want revoked", oldDeviceErr)
+	if _, err := authService.Authenticate(ctx, first.BrowserToken, deviceauth.WindowsBrowser); err != nil {
+		t.Fatalf("old browser auth error = %v", err)
 	}
 	if _, err := authService.Authenticate(ctx, second.BrowserToken, deviceauth.WindowsBrowser); err != nil {
 		t.Fatalf("new browser auth error = %v", err)
@@ -99,19 +99,75 @@ func TestPairingReplacementRevokesOldBrowserAtomically(t *testing.T) {
 	`).Scan(&activeBrowsers); err != nil {
 		t.Fatalf("count active browsers: %v", err)
 	}
-	if activeBrowsers != 1 {
-		t.Fatalf("active browser count = %d, want 1", activeBrowsers)
+	if activeBrowsers != 2 {
+		t.Fatalf("active browser count = %d, want 2", activeBrowsers)
 	}
-	if len(revokedDeviceIDs) != 1 || revokedDeviceIDs[0] != oldDevice.ID {
-		t.Fatalf("revoked notification = %v, want [%s]", revokedDeviceIDs, oldDevice.ID)
+	if oldDevice.ID == "" || len(events) != 2 || events[0] != "device.created" || events[1] != "device.created" {
+		t.Fatalf("created events = %v", events)
+	}
+}
+
+func TestPairingRejectsBrowserBeyondConfiguredLimit(t *testing.T) {
+	db := testDatabaseWithMaster(t)
+	service := NewService(db, 2*time.Minute, 1, nil)
+	ctx := context.Background()
+	first := createAndApprove(t, service, false)
+	if _, err := service.Poll(ctx, first.ID, first.BrowserToken); err != nil {
+		t.Fatalf("consume first browser: %v", err)
+	}
+	second, err := service.Create(ctx, "Second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = service.Approve(ctx, Credential{SessionID: second.ID, QRSecret: second.QRSecret}, "master-1", false)
+	if !errors.Is(err, ErrBrowserLimitReached) {
+		t.Fatalf("Approve() error = %v, want ErrBrowserLimitReached", err)
+	}
+	var active int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM devices WHERE device_type='windows_browser' AND revoked_at IS NULL`).Scan(&active); err != nil || active != 1 {
+		t.Fatalf("active browsers = %d, %v", active, err)
+	}
+}
+
+func TestConcurrentPairingConsumptionCannotExceedLimit(t *testing.T) {
+	db := testDatabaseWithMaster(t)
+	service := NewService(db, 2*time.Minute, 1, nil)
+	first := createAndApprove(t, service, false)
+	second := createAndApprove(t, service, false)
+
+	var wg sync.WaitGroup
+	errorsFound := make(chan error, 2)
+	for _, session := range []Session{first, second} {
+		wg.Add(1)
+		go func(session Session) {
+			defer wg.Done()
+			_, err := service.Poll(context.Background(), session.ID, session.BrowserToken)
+			errorsFound <- err
+		}(session)
+	}
+	wg.Wait()
+	close(errorsFound)
+	var succeeded, limited int
+	for err := range errorsFound {
+		switch {
+		case err == nil:
+			succeeded++
+		case errors.Is(err, ErrBrowserLimitReached):
+			limited++
+		default:
+			t.Fatalf("unexpected Poll error: %v", err)
+		}
+	}
+	if succeeded != 1 || limited != 1 {
+		t.Fatalf("concurrent results succeeded/limited = %d/%d", succeeded, limited)
 	}
 }
 
 func TestFiveWrongQRSecretsExpireSession(t *testing.T) {
 	db := testDatabaseWithMaster(t)
-	service := NewService(db, 2*time.Minute)
+	service := NewService(db, 2*time.Minute, 10, nil)
 	ctx := context.Background()
-	session, err := service.Create(ctx)
+	session, err := service.Create(ctx, "Browser")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -130,9 +186,9 @@ func TestFiveWrongQRSecretsExpireSession(t *testing.T) {
 
 func TestFiveWrongManualCodesExpireActiveSession(t *testing.T) {
 	db := testDatabaseWithMaster(t)
-	service := NewService(db, 2*time.Minute)
+	service := NewService(db, 2*time.Minute, 10, nil)
 	ctx := context.Background()
-	session, err := service.Create(ctx)
+	session, err := service.Create(ctx, "Browser")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -160,7 +216,7 @@ func TestCreateRequiresAndroidMaster(t *testing.T) {
 	}
 	defer db.Close()
 
-	_, err = NewService(db, 2*time.Minute).Create(context.Background())
+	_, err = NewService(db, 2*time.Minute, 10, nil).Create(context.Background(), "Browser")
 	if !errors.Is(err, ErrNotInitialized) {
 		t.Fatalf("Create() error = %v, want ErrNotInitialized", err)
 	}
@@ -185,7 +241,7 @@ func testDatabaseWithMaster(t *testing.T) *sql.DB {
 
 func createAndApprove(t *testing.T, service *Service, replace bool) Session {
 	t.Helper()
-	session, err := service.Create(context.Background())
+	session, err := service.Create(context.Background(), "Browser")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}

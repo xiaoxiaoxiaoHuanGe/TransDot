@@ -29,6 +29,7 @@ func instanceInfo(instances instanceService, setup setupService, publicURL strin
 		writeJSON(w, http.StatusOK, map[string]any{
 			"instance_id": identity.ID, "instance_fingerprint": identity.Fingerprint,
 			"initialized": initialized, "public_url": publicURL,
+			"capabilities": []string{"multi_browser_v1"},
 		})
 	}
 }

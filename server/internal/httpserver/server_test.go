@@ -17,6 +17,7 @@ import (
 	"github.com/coder/websocket/wsjson"
 
 	"transdot.local/transfer-assistant/server/internal/deviceauth"
+	"transdot.local/transfer-assistant/server/internal/devices"
 	"transdot.local/transfer-assistant/server/internal/messages"
 	"transdot.local/transfer-assistant/server/internal/pairing"
 	"transdot.local/transfer-assistant/server/internal/realtime"
@@ -59,6 +60,14 @@ type fakePairingService struct {
 	session pairing.Session
 	poll    pairing.PollResult
 	err     error
+	receivedName *string
+}
+
+type fakeDeviceService struct {
+	listed  []devices.BrowserDevice
+	updated devices.BrowserDevice
+	count   int
+	err     error
 }
 
 type fakeMessageService struct {
@@ -89,9 +98,25 @@ func (s fakeMessageService) Context(context.Context, string) (messages.Context, 
 	return s.context, s.err
 }
 
-func (s fakePairingService) Create(context.Context) (pairing.Session, error) {
+func (s fakePairingService) Create(_ context.Context, deviceName string) (pairing.Session, error) {
+	if s.receivedName != nil {
+		*s.receivedName = deviceName
+	}
 	return s.session, s.err
 }
+
+func (s fakeDeviceService) ListActiveBrowsers(context.Context) ([]devices.BrowserDevice, error) {
+	return s.listed, s.err
+}
+
+func (s fakeDeviceService) CountActiveBrowsers(context.Context) (int, error) { return s.count, s.err }
+func (s fakeDeviceService) RenameBrowser(context.Context, string, string) (devices.BrowserDevice, error) {
+	return s.updated, s.err
+}
+func (s fakeDeviceService) RenameSelf(context.Context, string, string) (devices.BrowserDevice, error) {
+	return s.updated, s.err
+}
+func (s fakeDeviceService) RevokeBrowser(context.Context, string) error { return s.err }
 
 func (s fakePairingService) Approve(context.Context, pairing.Credential, string, bool) error {
 	return s.err
@@ -207,6 +232,85 @@ func TestCreatePairingSessionSetsProtectedCookie(t *testing.T) {
 	cookie := cookies[0]
 	if cookie.Name != pairingCookieName || !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteStrictMode {
 		t.Fatalf("pairing cookie is not protected: %+v", cookie)
+	}
+}
+
+func TestCreatePairingSessionAcceptsDeviceNameAndDefaultsEmptyBody(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for _, test := range []struct {
+		body string
+		want string
+	}{
+		{body: `{"device_name":"  Chrome · Windows  "}`, want: "Chrome · Windows"},
+		{body: "", want: devices.DefaultBrowserName},
+	} {
+		var received string
+		service := fakePairingService{receivedName: &received, session: pairing.Session{
+			ID: "session-1", Code: "538219", QRSecret: strings.Repeat("s", 43),
+			BrowserToken: strings.Repeat("b", 43), ExpiresAt: time.Now().Add(time.Minute), DeviceName: test.want,
+		}}
+		handler := createPairingSession(service, newAttemptLimiter(10, time.Minute), logger)
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/pairing/sessions", strings.NewReader(test.body))
+		request.RemoteAddr = "192.0.2.40:1234"
+		response := httptest.NewRecorder()
+		handler(response, request)
+		if response.Code != http.StatusCreated || received != test.want || !strings.Contains(response.Body.String(), `"device_name":"`+test.want+`"`) {
+			t.Fatalf("body %q => status/name/response = %d/%q/%s", test.body, response.Code, received, response.Body.String())
+		}
+	}
+}
+
+func TestBrowserSessionIncludesNameAndClearsRevokedCookie(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/auth/session", nil)
+	request.AddCookie(&http.Cookie{Name: browserCookieName, Value: "browser-token"})
+	response := httptest.NewRecorder()
+	browserSession(fakeAuthService{device: deviceauth.Device{ID: "browser-1", Type: deviceauth.WindowsBrowser, DisplayName: "Office"}}, logger)(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"display_name":"Office"`) {
+		t.Fatalf("session response = %d/%s", response.Code, response.Body.String())
+	}
+
+	response = httptest.NewRecorder()
+	browserSession(fakeAuthService{err: deviceauth.ErrDeviceRevoked}, logger)(response, request)
+	if response.Code != http.StatusUnauthorized || !strings.Contains(response.Body.String(), `"DEVICE_REVOKED"`) {
+		t.Fatalf("revoked response = %d/%s", response.Code, response.Body.String())
+	}
+	var cleared bool
+	for _, cookie := range response.Result().Cookies() {
+		cleared = cleared || cookie.Name == browserCookieName && cookie.MaxAge < 0 && cookie.Path == "/"
+	}
+	if !cleared {
+		t.Fatalf("revoked response did not expire browser cookie: %v", response.Result().Cookies())
+	}
+}
+
+func TestDeviceManagementHandlersEnforceRolesAndMapErrors(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	masterAuth := fakeAuthService{device: deviceauth.Device{ID: "master-1", Type: deviceauth.AndroidMaster}}
+	deviceService := fakeDeviceService{listed: []devices.BrowserDevice{{ID: "browser-1", DisplayName: "Office"}}, count: 1}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/devices/browsers", nil)
+	request.Header.Set("Authorization", "Bearer master-token")
+	response := httptest.NewRecorder()
+	listBrowserDevices(masterAuth, deviceService, 10, logger)(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"maximum_count":10`) {
+		t.Fatalf("list response = %d/%s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPatch, "/api/v1/devices/browsers/browser-1", strings.NewReader(`{"display_name":"bad"}`))
+	request.SetPathValue("id", "browser-1")
+	request.Header.Set("Authorization", "Bearer master-token")
+	response = httptest.NewRecorder()
+	renameBrowserDevice(masterAuth, fakeDeviceService{err: devices.ErrInvalidDisplayName}, logger)(response, request)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "INVALID_DEVICE_NAME") {
+		t.Fatalf("invalid rename response = %d/%s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/devices/browsers", nil)
+	request.AddCookie(&http.Cookie{Name: browserCookieName, Value: "browser-token"})
+	response = httptest.NewRecorder()
+	listBrowserDevices(fakeAuthService{err: deviceauth.ErrUnauthorized}, deviceService, 10, logger)(response, request)
+	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "MASTER_REQUIRED") {
+		t.Fatalf("browser management response = %d/%s", response.Code, response.Body.String())
 	}
 }
 
@@ -373,7 +477,7 @@ func TestAuthenticatedWebsocketReceivesEventsAndReplacement(t *testing.T) {
 	}
 	hub.RevokeDevices([]string{"browser-1"})
 	var replaced realtime.Event
-	if err := wsjson.Read(ctx, connection, &replaced); err != nil || replaced.Type != "device.replaced" {
+	if err := wsjson.Read(ctx, connection, &replaced); err != nil || replaced.Type != "device.revoked" {
 		t.Fatalf("replaced event = %+v, %v", replaced, err)
 	}
 	_, _, err = connection.Read(ctx)

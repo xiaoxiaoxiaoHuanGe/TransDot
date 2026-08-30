@@ -8,6 +8,8 @@ services:
       args:
         OFFICIAL_IMAGE_REGISTRY: "${OFFICIAL_IMAGE_REGISTRY:-public.ecr.aws/docker/library}"
         GOPROXY: "${GOPROXY:-https://proxy.golang.org,direct}"
+        APP_VERSION: "1.2.0"
+        GIT_COMMIT: "${GIT_COMMIT:-unknown}"
     image: transfer-assistant:local
     restart: unless-stopped
     ports:
@@ -24,6 +26,7 @@ services:
       FILE_TTL_HOURS: "${FILE_TTL_HOURS:-24}"
       FILE_MESSAGE_TTL_DAYS: "${FILE_MESSAGE_TTL_DAYS:-30}"
       PAIRING_TTL_SECONDS: "${PAIRING_TTL_SECONDS:-120}"
+      MAX_BROWSER_DEVICES: "${MAX_BROWSER_DEVICES:-10}"
       UPLOAD_SESSION_TTL_MINUTES: "${UPLOAD_SESSION_TTL_MINUTES:-30}"
     volumes:
       - transfer-data:/app/data

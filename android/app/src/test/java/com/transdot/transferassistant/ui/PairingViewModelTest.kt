@@ -56,6 +56,24 @@ class PairingViewModelTest {
     }
 
     @Test
+    fun qrPairingShowsBrowserNameBeforeAddingWithoutReplacement() = runTest(dispatcher.scheduler) {
+        val repository = FakePairingRepository(requireReplacement = false)
+        val viewModel = PairingViewModel(repository, FakeSessionStore())
+        viewModel.openScanner()
+        viewModel.onQRCodeScanned(
+            """{"v":2,"kind":"pairing","server_url":"https://transfer.example.com","instance_id":"instance-1","session_id":"123e4567-e89b-12d3-a456-426614174000","qr_secret":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","device_name":"Office Chrome"}""",
+        )
+
+        assertEquals("Office Chrome", viewModel.uiState.value.pairingDeviceName)
+        assertTrue(repository.replaceValues.isEmpty())
+
+        viewModel.confirmBrowserPairing()
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(listOf(false), repository.replaceValues)
+        assertEquals(PairingScreen.Success, viewModel.uiState.value.screen)
+    }
+
+    @Test
     fun rebindQrMustMatchCurrentServerOriginAndInstance() {
         val differentOrigin = rebindPayload(serverAddress = "https://other.example.com")
         val differentInstance = rebindPayload(instanceId = "instance-2")
@@ -98,7 +116,7 @@ class PairingViewModelTest {
         assertEquals(1, store.replacedSessions.size)
     }
 
-    private class FakePairingRepository : PairingRepository {
+    private class FakePairingRepository(private val requireReplacement: Boolean = true) : PairingRepository {
         val replaceValues = mutableListOf<Boolean>()
 
         override suspend fun approve(
@@ -107,7 +125,7 @@ class PairingViewModelTest {
             replaceExisting: Boolean,
         ) {
             replaceValues += replaceExisting
-            if (!replaceExisting) throw PairingFailure.ReplacementRequired()
+            if (requireReplacement && !replaceExisting) throw PairingFailure.ReplacementRequired()
         }
 
         override suspend fun reject(session: StoredSession, credential: PairingCredential) = Unit

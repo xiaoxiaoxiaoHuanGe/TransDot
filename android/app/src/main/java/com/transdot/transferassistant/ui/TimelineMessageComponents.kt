@@ -266,12 +266,16 @@ private fun MessageActionButtons(
 @Composable
 private fun MessageMeta(message: TimelineMessage) {
     Text(
-        "${if (message.sourceDeviceType == "android_master") "Android" else "Windows"} · ${formatMessageTime(message.createdAt)}",
+        "${timelineSourceLabel(message.sourceDeviceType, message.sourceDeviceName)} · ${formatMessageTime(message.createdAt)}",
         Modifier.padding(horizontal = AppSpacing.small, vertical = 3.dp),
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 }
+
+internal fun timelineSourceLabel(sourceDeviceType: String, sourceDeviceName: String?): String =
+    sourceDeviceName?.trim()?.takeIf(String::isNotEmpty)
+        ?: if (sourceDeviceType == "android_master") "Android" else "浏览器"
 
 @Composable
 internal fun UploadCard(upload: UploadProgress, onRetry: () -> Unit) {

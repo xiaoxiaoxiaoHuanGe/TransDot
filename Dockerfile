@@ -12,6 +12,8 @@ RUN npm run build
 
 FROM ${OFFICIAL_IMAGE_REGISTRY}/golang:1.26-alpine AS server-builder
 ARG GOPROXY=https://proxy.golang.org,direct
+ARG APP_VERSION=1.2.0
+ARG GIT_COMMIT=unknown
 ENV GOPROXY=${GOPROXY}
 WORKDIR /src/server
 
@@ -27,6 +29,11 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -ldflags="-s -w" \
     -o /out/transfer-assistant \
     ./cmd/transfer-assistant
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -trimpath \
+    -ldflags="-s -w -X transdot.local/transfer-assistant/server/internal/maintenance.AppVersion=${APP_VERSION} -X transdot.local/transfer-assistant/server/internal/maintenance.GitCommit=${GIT_COMMIT}" \
+    -o /out/transdot-maintenance \
+    ./cmd/transdot-maintenance
 
 
 FROM ${OFFICIAL_IMAGE_REGISTRY}/alpine:3.22 AS runtime
@@ -39,6 +46,7 @@ RUN apk add --no-cache ca-certificates tzdata \
 
 WORKDIR /app
 COPY --from=server-builder --chown=app:app /out/transfer-assistant /app/transfer-assistant
+COPY --from=server-builder --chown=app:app /out/transdot-maintenance /app/transdot-maintenance
 
 ENV PORT=5757 \
     DATA_DIR=/app/data

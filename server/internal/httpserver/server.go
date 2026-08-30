@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"transdot.local/transfer-assistant/server/internal/deviceauth"
+	"transdot.local/transfer-assistant/server/internal/devices"
 	"transdot.local/transfer-assistant/server/internal/lantransfer"
 	"transdot.local/transfer-assistant/server/internal/pairing"
 	"transdot.local/transfer-assistant/server/internal/realtime"
@@ -36,10 +37,18 @@ type deviceAuthenticator interface {
 }
 
 type pairingService interface {
-	Create(context.Context) (pairing.Session, error)
+	Create(context.Context, string) (pairing.Session, error)
 	Approve(context.Context, pairing.Credential, string, bool) error
 	Reject(context.Context, pairing.Credential) error
 	Poll(context.Context, string, string) (pairing.PollResult, error)
+}
+
+type deviceManagementService interface {
+	ListActiveBrowsers(context.Context) ([]devices.BrowserDevice, error)
+	CountActiveBrowsers(context.Context) (int, error)
+	RenameBrowser(context.Context, string, string) (devices.BrowserDevice, error)
+	RenameSelf(context.Context, string, string) (devices.BrowserDevice, error)
+	RevokeBrowser(context.Context, string) error
 }
 
 func New(
@@ -82,7 +91,7 @@ func NewComplete(
 	pairingService pairingService, bootstrapService bootstrapService, messageService messageService, fileService fileService,
 	instances instanceService, publicURL string, lanBroker *lantransfer.Broker, hub *realtime.Hub, webHandler http.Handler, logger *slog.Logger,
 ) http.Handler {
-	return newHandlerComplete(db, setupService, authService, pairingService, bootstrapService, nil, messageService, fileService, instances, publicURL, lanBroker, hub, webHandler, logger)
+	return newHandlerComplete(db, setupService, authService, pairingService, bootstrapService, nil, messageService, fileService, instances, publicURL, lanBroker, hub, webHandler, logger, nil, 0)
 }
 
 func NewCompleteWithRebind(
@@ -90,7 +99,17 @@ func NewCompleteWithRebind(
 	pairingService pairingService, bootstrapService bootstrapService, rebindService rebindService, messageService messageService, fileService fileService,
 	instances instanceService, publicURL string, lanBroker *lantransfer.Broker, hub *realtime.Hub, webHandler http.Handler, logger *slog.Logger,
 ) http.Handler {
-	return newHandlerComplete(db, setupService, authService, pairingService, bootstrapService, rebindService, messageService, fileService, instances, publicURL, lanBroker, hub, webHandler, logger)
+	return newHandlerComplete(db, setupService, authService, pairingService, bootstrapService, rebindService, messageService, fileService, instances, publicURL, lanBroker, hub, webHandler, logger, nil, 0)
+}
+
+func NewCompleteWithDeviceManagement(
+	db databasePinger, setupService setupService, authService deviceAuthenticator,
+	pairingService pairingService, bootstrapService bootstrapService, rebindService rebindService,
+	deviceService deviceManagementService, maximumBrowsers int,
+	messageService messageService, fileService fileService, instances instanceService, publicURL string,
+	lanBroker *lantransfer.Broker, hub *realtime.Hub, webHandler http.Handler, logger *slog.Logger,
+) http.Handler {
+	return newHandlerComplete(db, setupService, authService, pairingService, bootstrapService, rebindService, messageService, fileService, instances, publicURL, lanBroker, hub, webHandler, logger, deviceService, maximumBrowsers)
 }
 
 func newHandler(
@@ -112,13 +131,14 @@ func newHandlerWithInstance(
 	pairingService pairingService, messageService messageService, fileService fileService,
 	instances instanceService, publicURL string, hub *realtime.Hub, webHandler http.Handler, logger *slog.Logger,
 ) http.Handler {
-	return newHandlerComplete(db, setupService, authService, pairingService, nil, nil, messageService, fileService, instances, publicURL, nil, hub, webHandler, logger)
+	return newHandlerComplete(db, setupService, authService, pairingService, nil, nil, messageService, fileService, instances, publicURL, nil, hub, webHandler, logger, nil, 0)
 }
 
 func newHandlerComplete(
 	db databasePinger, setupService setupService, authService deviceAuthenticator,
 	pairingService pairingService, bootstrapService bootstrapService, rebindService rebindService, messageService messageService, fileService fileService,
 	instances instanceService, publicURL string, lanBroker *lantransfer.Broker, hub *realtime.Hub, webHandler http.Handler, logger *slog.Logger,
+	deviceService deviceManagementService, maximumBrowsers int,
 ) http.Handler {
 	mux := http.NewServeMux()
 	setupLimiter := newAttemptLimiter(5, 5*time.Minute)
@@ -145,6 +165,12 @@ func newHandlerComplete(
 	}
 	mux.HandleFunc("POST /api/v1/setup/claim", setupClaim(setupService, setupLimiter, logger))
 	mux.HandleFunc("GET /api/v1/auth/session", browserSession(authService, logger))
+	if deviceService != nil {
+		mux.HandleFunc("GET /api/v1/devices/browsers", listBrowserDevices(authService, deviceService, maximumBrowsers, logger))
+		mux.HandleFunc("PATCH /api/v1/devices/browsers/{id}", renameBrowserDevice(authService, deviceService, logger))
+		mux.HandleFunc("DELETE /api/v1/devices/browsers/{id}", revokeBrowserDevice(authService, deviceService, logger))
+		mux.HandleFunc("PATCH /api/v1/devices/self", renameSelfDevice(authService, deviceService, logger))
+	}
 	if instances != nil {
 		mux.HandleFunc("POST /api/v1/pairing/sessions", createPairingSessionWithInstance(pairingService, pairingCreateLimiter, instances, publicURL, logger))
 	} else {

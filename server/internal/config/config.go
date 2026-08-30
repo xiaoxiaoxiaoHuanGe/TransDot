@@ -23,6 +23,7 @@ const (
 	defaultFileTTLHours                  = 24
 	defaultFileMessageTTLDays            = 30
 	defaultUploadSessionTTLMinutes       = 30
+	defaultMaxBrowserDevices            = 10
 )
 
 type Config struct {
@@ -38,6 +39,7 @@ type Config struct {
 	FileTTL          time.Duration
 	FileMessageTTL   time.Duration
 	UploadSessionTTL time.Duration
+	MaxBrowserDevices int
 }
 
 func Load() (Config, error) {
@@ -107,6 +109,12 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg.UploadSessionTTL = time.Duration(uploadTTLMinutes) * time.Minute
+	if cfg.MaxBrowserDevices, err = positiveIntFromEnv("MAX_BROWSER_DEVICES", defaultMaxBrowserDevices); err != nil {
+		return Config{}, err
+	}
+	if cfg.MaxBrowserDevices > 50 {
+		return Config{}, fmt.Errorf("MAX_BROWSER_DEVICES cannot exceed 50")
+	}
 
 	if cfg.MaxBatchBytes < cfg.MaxFileBytes {
 		return Config{}, fmt.Errorf("MAX_BATCH_BYTES must be greater than or equal to MAX_FILE_BYTES")

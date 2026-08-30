@@ -22,6 +22,7 @@ internal object PairingPayload {
             secret,
             if (version == 2) json.optString("server_url") else "",
             if (version == 2) json.optString("instance_id") else "",
+            json.optString("device_name").takeIf(String::isNotBlank) ?: "浏览器设备",
         )
     }
 }

@@ -36,12 +36,15 @@ func TestClaimCreatesSingleAndroidMasterWithoutStoringPlaintext(t *testing.T) {
 	}
 
 	var storedHash []byte
-	var deviceType string
-	if err := db.QueryRow("SELECT device_type, token_hash FROM devices WHERE id = ?", result.DeviceID).Scan(&deviceType, &storedHash); err != nil {
+	var deviceType, displayName string
+	if err := db.QueryRow("SELECT device_type, display_name, token_hash FROM devices WHERE id = ?", result.DeviceID).Scan(&deviceType, &displayName, &storedHash); err != nil {
 		t.Fatalf("query device: %v", err)
 	}
 	if deviceType != "android_master" {
 		t.Fatalf("device_type = %q", deviceType)
+	}
+	if displayName != "Android Master" {
+		t.Fatalf("display_name = %q", displayName)
 	}
 	expectedHash := sha256.Sum256([]byte(result.MasterToken))
 	if !bytes.Equal(storedHash, expectedHash[:]) {

@@ -33,6 +33,9 @@ func TestAuthenticateActiveDevice(t *testing.T) {
 	if device.ID != "browser-1" || device.Type != WindowsBrowser {
 		t.Fatalf("device = %+v", device)
 	}
+	if device.DisplayName != "浏览器设备" {
+		t.Fatalf("DisplayName = %q", device.DisplayName)
+	}
 }
 
 func TestAuthenticateRejectsWrongDeviceType(t *testing.T) {

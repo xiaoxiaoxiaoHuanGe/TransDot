@@ -28,7 +28,7 @@ func TestHubPublishesRevokesAndShutsDown(t *testing.T) {
 	hub.RevokeDevices([]string{"browser-1"})
 	select {
 	case event := <-first.Replaced():
-		if event.Type != "device.replaced" {
+		if event.Type != "device.revoked" {
 			t.Fatalf("replacement event = %+v", event)
 		}
 	case <-time.After(time.Second):

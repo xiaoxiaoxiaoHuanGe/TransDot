@@ -14,6 +14,7 @@ import (
 	"transdot.local/transfer-assistant/server/internal/config"
 	"transdot.local/transfer-assistant/server/internal/database"
 	"transdot.local/transfer-assistant/server/internal/deviceauth"
+	"transdot.local/transfer-assistant/server/internal/devices"
 	transferfiles "transdot.local/transfer-assistant/server/internal/files"
 	"transdot.local/transfer-assistant/server/internal/httpserver"
 	serverinstance "transdot.local/transfer-assistant/server/internal/instance"
@@ -52,7 +53,8 @@ func main() {
 	authService := deviceauth.NewService(db)
 	hub := realtime.NewHub()
 	lanBroker := lantransfer.NewBroker(identity.ID)
-	pairingService := pairing.NewService(db, cfg.PairingTTL, hub.RevokeDevices)
+	pairingService := pairing.NewService(db, cfg.PairingTTL, cfg.MaxBrowserDevices, hub.Publish)
+	deviceService := devices.NewService(db, hub.RevokeDevices, hub.Publish)
 	rebindService := rebind.NewService(db, identity.ID, identity.Fingerprint, cfg.PairingTTL, hub.RevokeDevices)
 	messageService := messages.NewService(db)
 	fileService := transferfiles.NewService(db, transferfiles.Config{
@@ -74,7 +76,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddress(),
-		Handler:           httpserver.NewCompleteWithRebind(db, setupService, authService, pairingService, bootstrapService, rebindService, messageService, fileService, instanceService, cfg.PublicURL, lanBroker, hub, webHandler, logger),
+		Handler:           httpserver.NewCompleteWithDeviceManagement(db, setupService, authService, pairingService, bootstrapService, rebindService, deviceService, cfg.MaxBrowserDevices, messageService, fileService, instanceService, cfg.PublicURL, lanBroker, hub, webHandler, logger),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}

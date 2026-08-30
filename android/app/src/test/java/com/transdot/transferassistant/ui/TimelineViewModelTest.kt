@@ -102,6 +102,18 @@ class TimelineViewModelTest {
         assertEquals(listOf(2, 1), repository.uploadBatchSizes)
     }
 
+    @Test
+    fun deviceRealtimeEventRequestsDeviceListRefresh() = runTest(dispatcher.scheduler) {
+        val repository = FakeTimelineRepository(message("message-1", "hello", "windows_browser"))
+        val viewModel = TimelineViewModel(repository, FakeSessionStore())
+        viewModel.start()
+        dispatcher.scheduler.advanceUntilIdle()
+        repository.emit(TimelineEvent.DeviceListChanged("browser-1", "办公室电脑"))
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(1, viewModel.uiState.value.deviceListRevision)
+        assertEquals("办公室电脑", viewModel.uiState.value.messages.single().sourceDeviceName)
+    }
+
     private class FakeTimelineRepository(initial: TimelineMessage) : TimelineRepository {
         private var current = listOf(initial)
         private var listener: TimelineRealtimeListener? = null

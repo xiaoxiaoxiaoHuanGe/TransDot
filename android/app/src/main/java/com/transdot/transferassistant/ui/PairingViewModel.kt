@@ -38,6 +38,7 @@ data class PairingUiState(
     val errorMessage: String? = null,
     val bootstrapPayload: BootstrapPayload? = null,
     val rebindPayload: RebindPayload? = null,
+    val pairingDeviceName: String? = null,
 )
 
 class PairingViewModel(
@@ -82,6 +83,7 @@ class PairingViewModel(
                 manualCode = "",
                 replacementRequired = false,
                 errorMessage = null,
+                pairingDeviceName = null,
             )
         }
     }
@@ -128,7 +130,19 @@ class PairingViewModel(
             }
             return
         }
+        pendingCredential = credential
+        mutableUiState.update { it.copy(pairingDeviceName = credential.deviceName, errorMessage = null) }
+    }
+
+    fun confirmBrowserPairing() {
+        val credential = pendingCredential ?: return
+        mutableUiState.update { it.copy(pairingDeviceName = null) }
         submit(credential, replaceExisting = false)
+    }
+
+    fun cancelBrowserPairing() {
+        pendingCredential = null
+        mutableUiState.update { it.copy(pairingDeviceName = null, errorMessage = null) }
     }
 
     fun cancelBootstrap() { pendingBootstrapSession = null; mutableUiState.update { it.copy(bootstrapPayload = null) } }
@@ -218,6 +232,7 @@ class PairingViewModel(
                             isSubmitting = false,
                             replacementRequired = false,
                             errorMessage = null,
+                            pairingDeviceName = null,
                         )
                     }
                 }

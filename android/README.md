@@ -27,7 +27,7 @@ Master Token 使用 Android Keystore AES-256-GCM 加密后保存在应用私有�
 
 ## Windows 配对
 
-Android Master 首页点击“配对 Windows”，可使用 CameraX + ZXing Core 扫描 Web 二维码，或输入 6 位备用码。扫码完全在设备本地完成，不依赖 Google Play 服务。若服务器已有有效 Windows，只有在手机确认“替换”后，服务端才会在同一个 SQLite 事务中撤销旧设备并启用新设备。
+Android Master 首页点击“添加浏览器”，可使用 CameraX + ZXing Core 扫描 Web 二维码，或输入 6 位备用码。扫码完全在设备本地完成，不依赖 Google Play 服务。新版服务器会新增浏览器授权而不影响其他浏览器；连接旧版服务器时仍保留原有替换确认流程。
 
 ## 完整时间线
 

@@ -54,6 +54,7 @@ data class TimelineMessage(
     val createdAt: String,
     val metadataExpiresAt: String?,
     val file: FileAttachment? = null,
+    val sourceDeviceName: String? = null,
 )
 
 data class MessagePage(val messages: List<TimelineMessage>, val nextBefore: String?)
@@ -74,6 +75,7 @@ sealed interface TimelineEvent {
     data class Deleted(val messageId: String) : TimelineEvent
     data class FileExpired(val fileId: String, val messageId: String) : TimelineEvent
     data object DeviceReplaced : TimelineEvent
+    data class DeviceListChanged(val deviceID: String? = null, val displayName: String? = null) : TimelineEvent
     data object Unknown : TimelineEvent
 }
 
@@ -306,6 +308,7 @@ class NetworkTimelineRepository(
             json.getString("id"), json.getString("type"), json.optNullableString("batch_id"),
             json.getString("source_device_id"), json.getString("source_device_type"), json.optNullableString("text_content"),
             json.getString("created_at"), json.optNullableString("metadata_expires_at"), file,
+            json.optNullableString("source_device_name"),
         )
     }
 
@@ -316,6 +319,13 @@ class NetworkTimelineRepository(
             "message.deleted" -> TimelineEvent.Deleted(json.getJSONObject("data").getString("message_id"))
             "file.expired" -> TimelineEvent.FileExpired(json.getJSONObject("data").getString("file_id"), json.getJSONObject("data").getString("message_id"))
             "device.replaced" -> TimelineEvent.DeviceReplaced
+            "device.created", "device.updated", "device.revoked" -> {
+                val data = json.optJSONObject("data")
+                TimelineEvent.DeviceListChanged(
+                    deviceID = data?.optString("id")?.takeIf(String::isNotBlank),
+                    displayName = data?.optString("display_name")?.takeIf(String::isNotBlank),
+                )
+            }
             else -> TimelineEvent.Unknown
         }
     }
