@@ -22,7 +22,7 @@ TransDot 是一个自托管的 Android 与 Web 文件传输工具。服务端、
 | Android | Android 6.0 及以上。正式 APK 只连接 HTTPS 服务。 |
 | Web | 最新版 Chrome 或 Edge；局域网快传的目录授权依赖 File System Access API。 |
 
-正式 APK 从 [GitHub Releases](https://github.com/xiaoxiaoxiaoHuanGe/TransDot/releases) 下载。
+正式 APK 从 [GitHub Releases](https://github.com/xiaoxiaoxiaoHuanGe/TransDot/releases) 下载。每个版本同时提供体积较小的 `arm64-v8a` 包（适合绝大多数现代安卓手机）和兼容 32 位 ARM、x86、x86_64 的 `universal` 通用包；不确定设备架构时选择通用包。
 
 ## 1Panel 云服务器部署
 

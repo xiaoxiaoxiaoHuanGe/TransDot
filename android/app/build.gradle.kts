@@ -1,5 +1,9 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
+val buildUniversalApk = providers.gradleProperty("transdotUniversalApk")
+    .map(String::toBoolean)
+    .orElse(false)
+
 plugins {
     id("com.android.application")
     id("com.android.compose.screenshot")
@@ -18,6 +22,12 @@ android {
         versionName = "1.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        if (!buildUniversalApk.get()) {
+            ndk {
+                abiFilters += listOf("arm64-v8a")
+            }
+        }
     }
 
     buildTypes {

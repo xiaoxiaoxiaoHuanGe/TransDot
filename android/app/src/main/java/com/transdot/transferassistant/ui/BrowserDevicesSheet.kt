@@ -63,6 +63,7 @@ internal fun BrowserDevicesSheetContent(
     onRename: (String, String) -> Unit,
     onRevoke: (String) -> Unit,
     onClearError: () -> Unit,
+    now: Instant = Instant.now(),
 ) {
     var renameTarget by remember { mutableStateOf<BrowserDevice?>(null) }
     var renameValue by remember { mutableStateOf("") }
@@ -112,6 +113,7 @@ internal fun BrowserDevicesSheetContent(
                         device = device,
                         busy = state.actionDeviceId == device.id,
                         actionsEnabled = state.actionDeviceId == null,
+                        now = now,
                         onRename = { renameTarget = device; renameValue = device.displayName },
                         onRevoke = { revokeTarget = device },
                     )
@@ -167,6 +169,7 @@ private fun BrowserDeviceCard(
     device: BrowserDevice,
     busy: Boolean,
     actionsEnabled: Boolean,
+    now: Instant,
     onRename: () -> Unit,
     onRevoke: () -> Unit,
 ) {
@@ -177,7 +180,7 @@ private fun BrowserDeviceCard(
         ) {
             Text(device.displayName, style = MaterialTheme.typography.titleMedium)
             Text(
-                if (busy) "正在处理…" else "最近活动：${browserLastSeenLabel(device.lastSeenAt, Instant.now().toString())}",
+                if (busy) "正在处理…" else "最近活动：${browserLastSeenLabel(device.lastSeenAt, now.toString())}",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall,
             )

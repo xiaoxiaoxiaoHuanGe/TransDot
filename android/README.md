@@ -21,6 +21,23 @@ cd android
 
 调试包允许局域网 HTTP，便于 realme GT5 Pro 直接连接 Windows 主机的 `:5757`；Release 构建只允许 HTTPS。
 
+## 构建正式 APK
+
+默认 Release 仅包含 `arm64-v8a`，适合绝大多数现代安卓手机：
+
+```powershell
+cd android
+./gradlew.bat assembleRelease
+```
+
+需要同时兼容 32 位 ARM、x86 和 x86_64 时，显式构建通用包：
+
+```powershell
+./gradlew.bat -PtransdotUniversalApk=true assembleRelease
+```
+
+正式发布前使用 `scripts/verify-apk-abis.ps1` 检查 APK 内实际包含的 ABI，并使用项目正式证书执行 zipalign、签名和 `apksigner verify`。
+
 Master Token 使用 Android Keystore AES-256-GCM 加密后保存在应用私有存储，应用备份已禁用。
 
 首次启动优先点击“扫码连接服务器”，扫描未初始化 Web 页面显示的 Bootstrap 二维码，核对地址和实例指纹后确认。APP 会自动保存服务器地址和 Master Token；手动地址与 `OWNER_SETUP_TOKEN` 仍作为应急入口。

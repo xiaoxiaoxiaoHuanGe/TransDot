@@ -24,6 +24,7 @@ import com.transdot.transferassistant.data.UploadProgress
 import com.transdot.transferassistant.ui.theme.AppSpacing
 import com.transdot.transferassistant.ui.theme.ThemeMode
 import com.transdot.transferassistant.ui.theme.TransferAssistantTheme
+import java.time.Instant
 
 private val PreviewNoOp = {}
 
@@ -169,6 +170,7 @@ fun BrowserDevicesLightPreview() {
             onRename = { _, _ -> },
             onRevoke = {},
             onClearError = PreviewNoOp,
+            now = Instant.parse("2026-08-30T12:00:00Z"),
         )
     }
 }
@@ -189,6 +191,7 @@ fun BrowserDevicesDarkLargeTextPreview() {
             onRename = { _, _ -> },
             onRevoke = {},
             onClearError = PreviewNoOp,
+            now = Instant.parse("2026-08-30T12:00:00Z"),
         )
     }
 }
