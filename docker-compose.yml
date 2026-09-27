@@ -8,7 +8,7 @@ services:
       args:
         OFFICIAL_IMAGE_REGISTRY: "${OFFICIAL_IMAGE_REGISTRY:-public.ecr.aws/docker/library}"
         GOPROXY: "${GOPROXY:-https://proxy.golang.org,direct}"
-        APP_VERSION: "1.2.0"
+        APP_VERSION: "1.2.1"
         GIT_COMMIT: "${GIT_COMMIT:-unknown}"
     image: transfer-assistant:local
     restart: unless-stopped

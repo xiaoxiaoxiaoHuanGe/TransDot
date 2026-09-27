@@ -12,7 +12,7 @@ RUN npm run build
 
 FROM ${OFFICIAL_IMAGE_REGISTRY}/golang:1.26-alpine AS server-builder
 ARG GOPROXY=https://proxy.golang.org,direct
-ARG APP_VERSION=1.2.0
+ARG APP_VERSION=1.2.1
 ARG GIT_COMMIT=unknown
 ENV GOPROXY=${GOPROXY}
 WORKDIR /src/server
