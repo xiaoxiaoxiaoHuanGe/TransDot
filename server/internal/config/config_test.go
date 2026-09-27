@@ -41,7 +41,7 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.MaxFileBytes != 314572800 || cfg.MaxBatchBytes != 524288000 || cfg.MaxBatchItems != 20 {
 		t.Fatalf("upload limits = %d/%d/%d", cfg.MaxFileBytes, cfg.MaxBatchBytes, cfg.MaxBatchItems)
 	}
-	if cfg.FilePoolMaxBytes != 1073741824 || cfg.FileTTL != 24*time.Hour || cfg.FileMessageTTL != 30*24*time.Hour || cfg.UploadSessionTTL != 30*time.Minute {
+	if cfg.FilePoolMaxBytes != 1073741824 || cfg.FileTTL != 720*time.Hour || cfg.FileMessageTTL != 30*24*time.Hour || cfg.UploadSessionTTL != 30*time.Minute {
 		t.Fatalf("file lifecycle defaults are incorrect: %+v", cfg)
 	}
 }

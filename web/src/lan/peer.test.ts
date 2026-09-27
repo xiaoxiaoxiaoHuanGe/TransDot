@@ -212,6 +212,27 @@ describe('LanPeer', () => {
     expect(clearTimeout).toHaveBeenCalled()
   })
 
+  it('throttles sending progress while still publishing completion immediately', async () => {
+    const signals = new FakeSignals()
+    const connection = new FakeConnection()
+    const peer = new LanPeer(signals, () => connection, {
+      setTimeout, clearTimeout, now: () => 1000, id: () => 'file-1',
+    })
+    signals.listener?.({ type: 'lan.peer_online', sessionId: 's1' })
+    await vi.waitFor(() => expect(signals.offers).toHaveLength(1))
+    connection.channel.open()
+    peer.sendFiles([new File([new Uint8Array(LAN_CHUNK_BYTES * 10)], 'large.bin')])
+    const updates = vi.fn()
+    peer.subscribe(updates)
+    updates.mockClear()
+    connection.channel.receive(JSON.stringify({ type: 'file_accept', file_id: 'file-1' }))
+    await vi.waitFor(() => expect(controlFrames(connection.channel).some(frame => frame.type === 'file_complete')).toBe(true))
+    expect(updates.mock.calls.length).toBeLessThanOrEqual(2)
+    connection.channel.receive(JSON.stringify({ type: 'file_verified', file_id: 'file-1' }))
+    await vi.waitFor(() => expect(peer.state.items[0].status).toBe('completed'))
+    expect(peer.state.items[0].transferredBytes).toBe(LAN_CHUNK_BYTES * 10)
+  })
+
   it('pauses at 4 MiB and resumes at the 1 MiB low-water mark', async () => {
     const signals = new FakeSignals()
     const connection = new FakeConnection()

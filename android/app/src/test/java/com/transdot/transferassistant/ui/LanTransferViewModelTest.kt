@@ -238,6 +238,23 @@ class LanTransferViewModelTest {
         assertFalse(peer.events.drop(cancelIndex + 1).contains("binary"))
     }
 
+    @Test
+    fun throttlesNotificationsButCompletesEveryByte() = runTest {
+        val peer = FakeTransferPeer().apply { state.value = LanPeerState.Connected }
+        val files = FakeFileAccess().apply { add("source", "large.bin", ByteArray(LAN_CHUNK_BYTES * 10)) }
+        val foreground = FakeForegroundController()
+        val model = model(peer, files, foreground)
+        model.enqueue(listOf("source")); advanceUntilIdle()
+        val id = model.uiState.value.items.single().id
+        peer.emit(LanControlFrame.FileAccept(id)); advanceUntilIdle()
+        assertEquals(10, peer.binary.size)
+        assertEquals(1, foreground.updates)
+        peer.emit(LanControlFrame.FileVerified(id)); advanceUntilIdle()
+        assertEquals(LanTransferStatus.Completed, model.uiState.value.items.single().status)
+        assertEquals((LAN_CHUNK_BYTES * 10).toLong(), model.uiState.value.items.single().transferredBytes)
+        model.close()
+    }
+
     private fun TestScope.model(
         peer: FakeTransferPeer,
         files: FakeFileAccess,
@@ -315,6 +332,7 @@ private class FakeFileAccess : LanTransferFiles {
 }
 
 private class FakeForegroundController : LanForegroundController {
+    var updates = 0
     var starts = 0
     var stops = 0
     var failStart = false
@@ -322,6 +340,6 @@ private class FakeForegroundController : LanForegroundController {
         if (failStart) error("FOREGROUND_SERVICE_UNAVAILABLE")
         starts += 1
     }
-    override fun update(direction: LanTransferDirection, filename: String, progress: Int) = Unit
+    override fun update(direction: LanTransferDirection, filename: String, progress: Int) { updates += 1 }
     override fun stop() { stops += 1 }
 }

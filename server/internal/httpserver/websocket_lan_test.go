@@ -91,6 +91,20 @@ func TestWebsocketRelaysAuthenticatedLANSignals(t *testing.T) {
 		t.Fatalf("LAN error = %s", errorData)
 	}
 
+	browser.CloseNow()
+	offline := readLANEvent(t, ctx, android, lantransfer.SignalPeerOffline)
+	if eventSessionID(t, offline) != androidSession {
+		t.Fatalf("wrong offline session: %#v", offline)
+	}
+	replacement := dialLANSocket(t, ctx, server.URL, http.Header{"Cookie": []string{browserCookieName + "=browser-token"}})
+	defer replacement.CloseNow()
+	writeLANSignal(t, ctx, replacement, lantransfer.ClientSignal{Type: lantransfer.SignalReady})
+	next := readLANEvent(t, ctx, android, lantransfer.SignalPeerOnline)
+	if eventSessionID(t, next) == androidSession {
+		t.Fatal("replacement reused stale session")
+	}
+	readLANEvent(t, ctx, replacement, lantransfer.SignalPeerOnline)
+
 	assertLANExchangePrivate(t, db, dataDir, []realtime.Event{
 		androidOnline, browserOnline, offerEvent, answerEvent, iceEvent, errorEvent,
 	})

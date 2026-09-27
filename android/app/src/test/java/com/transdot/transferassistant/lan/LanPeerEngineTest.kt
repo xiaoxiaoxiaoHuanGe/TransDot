@@ -184,6 +184,22 @@ class LanPeerEngineTest {
     }
 
     @Test
+    fun browserLeavingAutomaticallyPreparesFreshPeer() = runTest {
+        val signals = FakeLanSignals(); val factory = FakeLanPeerFactory()
+        val engine = LanPeerEngine(signals, factory, backgroundScope)
+        engine.start(); runCurrent()
+        signals.emit(LanSignalEvent.PeerOnline("old")); runCurrent()
+        val old = factory.peer
+        signals.emit(LanSignalEvent.PeerOffline("old")); runCurrent()
+        assertEquals(LanPeerState.Waiting, engine.state.value)
+        assertEquals(1, old.closeCount)
+        assertEquals(2, factory.createCount)
+        signals.emit(LanSignalEvent.PeerOnline("new"))
+        signals.emit(LanSignalEvent.Offer("new", "new-offer")); runCurrent()
+        assertEquals("new-offer", factory.peer.remoteSdp)
+    }
+
+    @Test
     fun reconnectAfterFailureCreatesAFreshPeerAndReannouncesReady() = runTest {
         val signals = FakeLanSignals()
         val factory = FakeLanPeerFactory()

@@ -124,6 +124,7 @@ export class LanPeer {
   private remoteDescriptionSet = false
   private pendingRemoteIce: LanIceCandidate[] = []
   private activeSessionId = ''
+  private lastProgressAt = -Infinity
 
   constructor(
     private readonly signaling: SignalTransport,
@@ -325,6 +326,7 @@ export class LanPeer {
     const generation = ++this.transferGeneration
     const channel = this.channel
     if (!channel || channel.readyState !== 'open') return
+    this.lastProgressAt = -Infinity
     const hash = sha256.create()
     for (let offset = 0; offset < record.file.size; offset += LAN_CHUNK_BYTES) {
       if (!this.isActiveSend(record, generation, channel)) return
@@ -337,7 +339,7 @@ export class LanPeer {
       record.transferredBytes += chunk.byteLength
       record.progress = record.size === 0 ? 1 : record.transferredBytes / record.size
       record.speedBytesPerSecond = transferSpeed(record.transferredBytes, record.startedAt, this.dependencies.now())
-      this.publishItems()
+      if (this.progressDue()) this.publishItems()
     }
     if (!this.isActiveSend(record, generation, channel)) return
     record.progress = record.size === 0 ? 1 : record.progress
@@ -444,6 +446,7 @@ export class LanPeer {
       }
       this.receivedNames.add(name)
       this.incoming = incoming
+      this.lastProgressAt = -Infinity
       this.setState({
         ...this.state,
         status: 'transferring',
@@ -508,6 +511,7 @@ export class LanPeer {
   }
 
   private updateIncoming(incoming: ReceiveRecord) {
+    if (!this.progressDue()) return
     const progress = incoming.offer.size === 0 ? 1 : incoming.receivedBytes / incoming.offer.size
     this.patchItem(incoming.offer.file_id, {
       transferredBytes: incoming.receivedBytes,
@@ -529,6 +533,13 @@ export class LanPeer {
   private sendControl(frame: LanControlFrame) {
     if (!this.channel || this.channel.readyState !== 'open') return false
     this.channel.send(encodeControl(frame))
+    return true
+  }
+
+  private progressDue() {
+    const timestamp = this.dependencies.now()
+    if (timestamp - this.lastProgressAt < 200) return false
+    this.lastProgressAt = timestamp
     return true
   }
 

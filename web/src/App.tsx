@@ -240,7 +240,7 @@ function uploadErrorMessage(error: unknown) {
     FILE_TOO_LARGE: '单个文件不能超过 300 MB。',
     BATCH_TOO_LARGE: '单批文件不能超过 500 MB。',
     TOO_MANY_FILES: '一次最多选择 20 个文件。',
-    INSUFFICIENT_STORAGE: '临时文件池空间不足，请稍后重试。',
+    INSUFFICIENT_STORAGE: '服务器文件池已满。已有文件会保留到期，请删除不需要的内容或联系管理员扩容。',
     UPLOAD_EXPIRED: '上传会话已过期，请重新选择文件。',
     UPLOAD_INCOMPLETE: '文件上传不完整，请重试。',
   }
@@ -1233,7 +1233,7 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
                   <article
                     id={`message-${message.id}`}
                     key={group.key}
-                    className={`message-row ${group.kind === 'images' ? 'message-row--images' : ''} ${own ? 'message-row--own' : ''} ${group.messages.some((item) => highlightedID === item.id) ? 'message-row--highlighted' : ''}`}
+                    className={`message-row ${message.type === 'text' ? 'message-row--text' : ''} ${group.kind === 'images' ? 'message-row--images' : ''} ${own ? 'message-row--own' : ''} ${group.messages.some((item) => highlightedID === item.id) ? 'message-row--highlighted' : ''}`}
                   >
                     <div className="message-meta">
                       <span>{sourceDeviceLabel(message, authSession.device_id)}</span>
@@ -1581,7 +1581,7 @@ function fileStatusLabel(file?: FileAttachment) {
   if (!file || file.status !== 'available') return '已过期'
   if (!file.expires_at) return '可下载'
   const hours = Math.max(0, Math.ceil((new Date(file.expires_at).getTime() - Date.now()) / 3_600_000))
-  return `${hours} 小时后过期`
+  return hours >= 24 ? `${Math.ceil(hours / 24)} 天后过期` : `${hours} 小时后过期`
 }
 
 function Brand() {

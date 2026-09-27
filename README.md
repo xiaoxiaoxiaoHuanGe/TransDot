@@ -166,11 +166,13 @@ Invoke-RestMethod http://localhost:5757/healthz
 | `MAX_BATCH_BYTES` | 500 MiB，单批总大小 |
 | `MAX_BATCH_ITEMS` | 20，单批文件数 |
 | `FILE_POOL_MAX_BYTES` | 1 GiB，文件池容量 |
-| `FILE_TTL_HOURS` | 24，原文件保留时间 |
+| `FILE_TTL_HOURS` | 720，原文件保留 30 天 |
 | `FILE_MESSAGE_TTL_DAYS` | 30，缩略图与文件消息保留时间 |
 | `PAIRING_TTL_SECONDS` | 120，二维码/配对码有效期 |
 | `MAX_BROWSER_DEVICES` | 10，活动浏览器授权上限（范围 1–50） |
 | `UPLOAD_SESSION_TTL_MINUTES` | 30，未完成上传会话有效期 |
+
+新上传的图片和附件默认保留 30 天；已有文件沿用原到期时间。文件池满时拒绝新上传，不提前淘汰未到期文件，可手动删除或扩容。
 
 服务每 5 分钟清理过期上传、临时文件和过期内容。局域网快传不占用云端文件池。
 

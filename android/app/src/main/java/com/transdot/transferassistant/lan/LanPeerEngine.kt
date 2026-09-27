@@ -121,17 +121,27 @@ class LanPeerEngine(
         signalJob = scope.launch {
             signals.events.collect { event ->
                 when (event) {
-                    is LanSignalEvent.PeerOnline -> setActiveSession(event.sessionId)
+                    is LanSignalEvent.PeerOnline -> {
+                        if (peer == null) createPeer()
+                        setActiveSession(event.sessionId)
+                    }
                     is LanSignalEvent.Offer -> if (isActiveSession(event.sessionId)) acceptOffer(event.sdp)
                     is LanSignalEvent.Ice -> if (isActiveSession(event.sessionId)) acceptIce(event.ice)
                     is LanSignalEvent.PeerOffline -> if (clearActiveSession(event.sessionId)) {
-                        fail("LAN_PEER_OFFLINE")
+                        prepareForNextPeer()
                     }
                     is LanSignalEvent.Error -> fail(event.code)
                     else -> Unit
                 }
             }
         }
+    }
+
+    private fun prepareForNextPeer() {
+        fail("LAN_PEER_OFFLINE")
+        if (closed.get()) return
+        createPeer()
+        mutableState.value = LanPeerState.Waiting
     }
 
     private fun acceptOffer(sdp: String) {

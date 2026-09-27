@@ -129,13 +129,16 @@ func TestCapacityExpiryAndActiveDownloadProtection(t *testing.T) {
 		t.Fatalf("capacity with active download error = %v", err)
 	}
 	active.Release()
-	secondBatch, err := service.CreateBatch(ctx, "android-1", []UploadItem{{Filename: "second.bin", MIMEType: "application/octet-stream", SizeBytes: 6, Kind: KindFile}})
-	if err != nil || len(secondBatch.Uploads) != 1 {
-		t.Fatalf("batch after release = %+v, %v", secondBatch, err)
+	if _, err := service.CreateBatch(ctx, "android-1", []UploadItem{{Filename: "second.bin", MIMEType: "application/octet-stream", SizeBytes: 6, Kind: KindFile}}); !errors.Is(err, ErrInsufficientStorage) {
+		t.Fatalf("unexpired file must not be evicted: %v", err)
 	}
-	var status, reason string
-	if err := db.QueryRow(`SELECT status, expired_reason FROM files WHERE message_id = ?`, first.ID).Scan(&status, &reason); err != nil || status != "expired" || reason != "capacity" {
-		t.Fatalf("evicted file = %q/%q, %v", status, reason, err)
+	var status string
+	if err := db.QueryRow(`SELECT status FROM files WHERE message_id = ?`, first.ID).Scan(&status); err != nil || status != "available" {
+		t.Fatalf("protected file = %q, %v", status, err)
+	}
+	clock = clock.Add(cfg.FileTTL + time.Second)
+	if _, err := service.CreateBatch(ctx, "android-1", []UploadItem{{Filename: "second.bin", MIMEType: "application/octet-stream", SizeBytes: 6, Kind: KindFile}}); err != nil {
+		t.Fatalf("upload after TTL = %v", err)
 	}
 }
 
@@ -207,4 +210,56 @@ func testServiceWithNotify(t *testing.T, cfg Config, notify NotifyFunc) (*Servic
 		t.Fatal(err)
 	}
 	return NewService(db, cfg, notify), db, cfg.DataDir
+}
+
+func TestNewFilesKeepThirtyDaysAndExistingExpiryIsUnchanged(t *testing.T) {
+	cfg := testConfig(t, 100)
+	service, db, _ := testService(t, cfg)
+	ctx := context.Background()
+	clock := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	service.now = func() time.Time { return clock }
+	upload := func(kind string, name string) UploadTicket {
+		batch, err := service.CreateBatch(ctx, "android-1", []UploadItem{{Filename: name, MIMEType: "application/octet-stream", SizeBytes: 1, Kind: kind}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.CompleteUpload(ctx, batch.Uploads[0].UploadID, "android-1", 1, bytes.NewBufferString("x")); err != nil {
+			t.Fatal(err)
+		}
+		return batch.Uploads[0]
+	}
+	old := upload(KindFile, "old.bin")
+	var oldExpiry string
+	if err := db.QueryRow(`SELECT expires_at FROM files WHERE id = ?`, old.FileID).Scan(&oldExpiry); err != nil {
+		t.Fatal(err)
+	}
+	service.config.FileTTL = 720 * time.Hour
+	service.config.FileMessageTTL = 720 * time.Hour
+	image := upload(KindImage, "new.jpg")
+	file := upload(KindFile, "new.bin")
+	var unchanged string
+	if err := db.QueryRow(`SELECT expires_at FROM files WHERE id = ?`, old.FileID).Scan(&unchanged); err != nil || unchanged != oldExpiry {
+		t.Fatalf("old expiry changed: %q / %q, %v", oldExpiry, unchanged, err)
+	}
+	clock = clock.Add(720*time.Hour - time.Second)
+	if err := service.Cleanup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, ticket := range []UploadTicket{image, file} {
+		download, err := service.OpenDownload(ctx, ticket.FileID)
+		if err != nil {
+			t.Fatalf("new file unavailable before 30 days: %v", err)
+		}
+		download.Reader.Close()
+		download.Release()
+	}
+	clock = clock.Add(time.Second)
+	if err := service.Cleanup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, ticket := range []UploadTicket{image, file} {
+		if _, err := service.OpenDownload(ctx, ticket.FileID); !errors.Is(err, ErrFileNotFound) {
+			t.Fatalf("file still available at 30 days: %v", err)
+		}
+	}
 }

@@ -286,7 +286,7 @@ class NetworkTimelineRepository(
             "FILE_TOO_LARGE" -> TimelineFailure.Invalid("单个文件不能超过 300 MB。")
             "BATCH_TOO_LARGE" -> TimelineFailure.Invalid("单批文件不能超过 500 MB。")
             "TOO_MANY_FILES" -> TimelineFailure.Invalid("一次最多选择 20 个文件。")
-            "INSUFFICIENT_STORAGE" -> TimelineFailure.Invalid("服务器临时文件池空间不足。")
+            "INSUFFICIENT_STORAGE" -> TimelineFailure.Invalid("服务器文件池已满。已有文件会保留到期，请删除不需要的内容或联系管理员扩容。")
             "TEXT_EMPTY", "TEXT_TOO_LARGE", "TEXT_INVALID_UTF8", "SEARCH_INVALID", "UPLOAD_INCOMPLETE", "UPLOAD_EXPIRED" ->
                 TimelineFailure.Invalid(error.optString("message").ifBlank { code.orEmpty() })
             else -> TimelineFailure.Server(error?.optString("message").orEmpty().ifBlank { "服务器请求失败（HTTP $status）。" })

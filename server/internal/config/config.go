@@ -20,25 +20,25 @@ const (
 	defaultMaxBatchBytes           int64 = 524288000
 	defaultMaxBatchItems                 = 20
 	defaultFilePoolMaxBytes        int64 = 1073741824
-	defaultFileTTLHours                  = 24
+	defaultFileTTLHours                  = 720
 	defaultFileMessageTTLDays            = 30
 	defaultUploadSessionTTLMinutes       = 30
-	defaultMaxBrowserDevices            = 10
+	defaultMaxBrowserDevices             = 10
 )
 
 type Config struct {
-	Port             int
-	DataDir          string
-	OwnerSetupToken  string
-	PublicURL        string
-	PairingTTL       time.Duration
-	MaxFileBytes     int64
-	MaxBatchBytes    int64
-	MaxBatchItems    int
-	FilePoolMaxBytes int64
-	FileTTL          time.Duration
-	FileMessageTTL   time.Duration
-	UploadSessionTTL time.Duration
+	Port              int
+	DataDir           string
+	OwnerSetupToken   string
+	PublicURL         string
+	PairingTTL        time.Duration
+	MaxFileBytes      int64
+	MaxBatchBytes     int64
+	MaxBatchItems     int
+	FilePoolMaxBytes  int64
+	FileTTL           time.Duration
+	FileMessageTTL    time.Duration
+	UploadSessionTTL  time.Duration
 	MaxBrowserDevices int
 }
 

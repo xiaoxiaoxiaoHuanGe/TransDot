@@ -87,7 +87,7 @@ fun LanTransferScreen(
                         else -> StatusTone.Info
                     },
                     title = connectionText,
-                    message = receiveFolderLabel?.let { "自动接收到：$it" } ?: "接收前需要选择一次保存文件夹",
+                    message = receiveFolderLabel?.let { "自动接收到：$it。建议两端连接同一局域网的 5 GHz Wi-Fi" } ?: "接收前需要选择一次保存文件夹",
                     modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                 )
             }

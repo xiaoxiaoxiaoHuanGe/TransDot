@@ -34,7 +34,7 @@ var (
 	ErrSignalInvalid    = errors.New("LAN signal is invalid")
 )
 
-type Device struct{ ID, Type string }
+type Device struct{ ID, Type, ConnectionID string }
 
 type ClientSignal struct {
 	Type      string          `json:"type"`
@@ -79,11 +79,16 @@ func (b *Broker) Ready(device Device, now time.Time) []Delivery {
 	if !validDevice(device) {
 		return nil
 	}
+	var deliveries []Delivery
+	previous, exists := b.ready[device.Type]
+	if exists && previous.ConnectionID != device.ConnectionID {
+		deliveries = b.leaveLocked(previous.ID, now)
+	}
 	b.ready[device.Type] = device
 	android, androidOK := b.ready[AndroidMaster]
 	browser, browserOK := b.ready[WindowsBrowser]
 	if !androidOK || !browserOK {
-		return nil
+		return deliveries
 	}
 	if b.active != nil {
 		if b.active.androidID == android.ID && b.active.browserID == browser.ID {
@@ -93,7 +98,7 @@ func (b *Broker) Ready(device Device, now time.Time) []Delivery {
 	}
 	b.active = &session{id: uuid.NewString(), androidID: android.ID, browserID: browser.ID, state: "negotiating", createdAt: now}
 	signal := ServerSignal{Type: SignalPeerOnline, SessionID: b.active.id, Timestamp: now}
-	return []Delivery{{DeviceID: android.ID, Signal: signal}, {DeviceID: browser.ID, Signal: signal}}
+	return append(deliveries, Delivery{DeviceID: android.ID, Signal: signal}, Delivery{DeviceID: browser.ID, Signal: signal})
 }
 
 func (b *Broker) Handle(device Device, signal ClientSignal, now time.Time) ([]Delivery, error) {
@@ -101,6 +106,9 @@ func (b *Broker) Handle(device Device, signal ClientSignal, now time.Time) ([]De
 	defer b.mu.Unlock()
 	b.expire(now)
 	if b.active == nil || signal.SessionID == "" || signal.SessionID != b.active.id || !b.inSession(device) {
+		return nil, ErrSessionInvalid
+	}
+	if device.ConnectionID != "" && b.ready[device.Type].ConnectionID != device.ConnectionID {
 		return nil, ErrSessionInvalid
 	}
 	target := b.other(device)
@@ -134,6 +142,18 @@ func (b *Broker) Handle(device Device, signal ClientSignal, now time.Time) ([]De
 		return nil, ErrSignalInvalid
 	}
 	return []Delivery{{DeviceID: target, Signal: ServerSignal{Type: signal.Type, SessionID: signal.SessionID, Timestamp: now, Data: signal.Data}}}, nil
+}
+
+// LeaveConnection ignores sockets that have been replaced or never entered LAN mode.
+func (b *Broker) LeaveConnection(deviceID, connectionID string) []Delivery {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, device := range b.ready {
+		if device.ID == deviceID && device.ConnectionID == connectionID {
+			return b.leaveLocked(deviceID, time.Now().UTC())
+		}
+	}
+	return nil
 }
 
 func (b *Broker) Leave(deviceID string) []Delivery {

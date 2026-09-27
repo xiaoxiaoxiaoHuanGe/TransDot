@@ -129,3 +129,16 @@ func readyBroker(t *testing.T) (*Broker, string) {
 	}
 	return broker, deliveries[0].Signal.SessionID
 }
+
+func TestOldSocketCannotRemoveReplacementReady(t *testing.T) {
+	b := NewBroker("instance")
+	b.Ready(Device{ID: "android", Type: AndroidMaster}, testStart)
+	b.Ready(Device{ID: "browser", Type: WindowsBrowser, ConnectionID: "old"}, testStart)
+	b.Ready(Device{ID: "browser", Type: WindowsBrowser, ConnectionID: "new"}, testStart)
+	if got := b.LeaveConnection("browser", "old"); len(got) != 0 {
+		t.Fatalf("stale socket left session: %#v", got)
+	}
+	if got := b.LeaveConnection("browser", "new"); len(got) != 1 {
+		t.Fatalf("current socket did not leave: %#v", got)
+	}
+}

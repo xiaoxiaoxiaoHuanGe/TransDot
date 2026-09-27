@@ -108,6 +108,7 @@ class LanTransferViewModel(
     private val sendMutex = Mutex()
     private var incomingOfferCount = 0
     private var outgoingBatchOpen = false
+    private var lastProgressAt = Long.MIN_VALUE
 
     init {
         scope.launch(start = CoroutineStart.UNDISPATCHED) { peer.state.collect(::onPeerState) }
@@ -222,6 +223,7 @@ class LanTransferViewModel(
         }
         if (!peer.beginFile(next.id)) return
         val transferring = next.copy(status = LanTransferStatus.Transferring)
+        lastProgressAt = Long.MIN_VALUE
         active = ActiveTransfer.Outgoing(transferring, now())
         replaceItem(transferring)
         update { it.copy(currentFileId = next.id) }
@@ -252,6 +254,7 @@ class LanTransferViewModel(
             peer.sendControl(LanControlFrame.FileReject(offer.fileId, "DESTINATION_UNAVAILABLE"))
             return
         }
+        lastProgressAt = Long.MIN_VALUE
         active = ActiveTransfer.Incoming(item, now(), destination)
         update { it.copy(items = it.items + item, currentFileId = item.id, error = null) }
         if (!startForeground(item)) {
@@ -362,7 +365,7 @@ class LanTransferViewModel(
         current.input?.runCatching { close() }
         if (sendJob !== currentCoroutineContext()[Job]) sendJob?.cancel()
         sendMutex.withLock { sendJob = null }
-        replaceItem(current.item.copy(status = LanTransferStatus.Failed, transferredBytes = current.transferred, error = code))
+        replaceItem(current.item.copy(status = LanTransferStatus.Failed, transferredBytes = current.transferred, speedBytesPerSecond = 0, error = code))
         update { it.copy(currentFileId = null, error = code) }
         finishPeerFile(fileId)
         runCatching { foreground.stop() }
@@ -392,6 +395,9 @@ class LanTransferViewModel(
     }
 
     private fun publishProgress(current: ActiveTransfer) {
+        val timestamp = now()
+        if (lastProgressAt != Long.MIN_VALUE && timestamp - lastProgressAt < 200) return
+        lastProgressAt = timestamp
         val updated = itemWithProgress(current, LanTransferStatus.Transferring)
         replaceItem(updated)
         runCatching { foreground.update(updated.direction, updated.name, (updated.progress * 100).toInt()) }

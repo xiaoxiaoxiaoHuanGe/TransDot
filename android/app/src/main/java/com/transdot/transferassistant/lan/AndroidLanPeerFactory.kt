@@ -72,22 +72,30 @@ private class WebRtcPeerConnection(
 ) : LanPeerConnection {
     private val closed = AtomicBoolean(false)
 
+    @Synchronized
     override fun setRemoteOffer(sdp: String, callback: LanSdpCallback) {
+        if (closed.get()) return
         native.setRemoteDescription(SetSdpObserver(callback, sdp, dispatch), SessionDescription(SessionDescription.Type.OFFER, sdp))
     }
 
+    @Synchronized
     override fun createAnswer(callback: LanSdpCallback) {
+        if (closed.get()) return
         native.createAnswer(CreateSdpObserver(callback, dispatch), MediaConstraints())
     }
 
+    @Synchronized
     override fun setLocalAnswer(sdp: String, callback: LanSdpCallback) {
+        if (closed.get()) return
         native.setLocalDescription(SetSdpObserver(callback, sdp, dispatch), SessionDescription(SessionDescription.Type.ANSWER, sdp))
     }
 
-    override fun addIceCandidate(candidate: LanIceCandidate): Boolean = native.addIceCandidate(
+    @Synchronized
+    override fun addIceCandidate(candidate: LanIceCandidate): Boolean = !closed.get() && native.addIceCandidate(
         IceCandidate(candidate.sdpMid, candidate.sdpMLineIndex, candidate.candidate),
     )
 
+    @Synchronized
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         native.close()
@@ -121,18 +129,22 @@ private class WebRtcDataChannel(
     private val callbackScope: CoroutineScope,
 ) : LanDataChannel {
     private val closed = AtomicBoolean(false)
-    override val isOpen: Boolean get() = native.state() == DataChannel.State.OPEN
+    override val isOpen: Boolean get() = synchronized(this) { !closed.get() && native.state() == DataChannel.State.OPEN }
     override val isOrdered: Boolean = true
-    override val bufferedAmount: Long get() = native.bufferedAmount()
+    override val bufferedAmount: Long get() = synchronized(this) { if (closed.get()) 0L else native.bufferedAmount() }
 
     override fun setObserver(observer: LanDataChannelObserver) {
         native.registerObserver(object : DataChannel.Observer {
             override fun onBufferedAmountChange(previousAmount: Long) {
-                callbackScope.launch { observer.onBufferedAmountChange(previousAmount) }
+                callbackScope.launch { if (!closed.get()) observer.onBufferedAmountChange(previousAmount) }
             }
             override fun onStateChange() {
+                // Capture while the native callback owns a live channel. Deferred work must
+                // never query a channel that close() may already have disposed.
+                val state = native.state()
                 callbackScope.launch {
-                    when (native.state()) {
+                    if (closed.get()) return@launch
+                    when (state) {
                         DataChannel.State.OPEN -> observer.onOpen()
                         DataChannel.State.CLOSING, DataChannel.State.CLOSED -> observer.onClosed()
                         else -> Unit
@@ -143,20 +155,25 @@ private class WebRtcDataChannel(
                 val data = buffer.data.duplicate()
                 val bytes = ByteArray(data.remaining())
                 data.get(bytes)
+                val binary = buffer.binary
                 callbackScope.launch {
-                    if (buffer.binary) observer.onBinary(bytes)
+                    if (closed.get()) return@launch
+                    if (binary) observer.onBinary(bytes)
                     else observer.onText(String(bytes, StandardCharsets.UTF_8))
                 }
             }
         })
     }
 
-    override fun sendText(text: String): Boolean =
+    @Synchronized
+    override fun sendText(text: String): Boolean = !closed.get() &&
         native.send(DataChannel.Buffer(ByteBuffer.wrap(text.toByteArray(StandardCharsets.UTF_8)), false))
 
-    override fun sendBinary(bytes: ByteArray): Boolean =
+    @Synchronized
+    override fun sendBinary(bytes: ByteArray): Boolean = !closed.get() &&
         native.send(DataChannel.Buffer(ByteBuffer.wrap(bytes), true))
 
+    @Synchronized
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         native.unregisterObserver()

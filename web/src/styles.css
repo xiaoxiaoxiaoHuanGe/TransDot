@@ -269,6 +269,10 @@ footer { min-height: 68px; display: flex; align-items: center; justify-content: 
 .message-row--own .message-meta { justify-content: flex-end; }
 .message-meta time { font-variant-numeric: tabular-nums; font-weight: 520; }
 .message-body-line { display: flex; align-items: center; gap: 8px; }
+.message-row--text .message-body-line { align-items: flex-start; }
+.message-row--text .message-actions { padding-top: 2px; }
+.message-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+@media (pointer: coarse), (max-width: 460px) { .message-row--text .message-actions button { min-width: 44px; min-height: 44px; } }
 .message-row--own .message-body-line { justify-content: flex-end; }
 .message-row:not(.message-row--own) .message-actions { order: 2; }
 .message-body-line > :last-child { min-width: 0; }

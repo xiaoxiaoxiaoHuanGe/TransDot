@@ -219,7 +219,7 @@ export function LanTransferPanel({
               }} />
             </label>
           </div>
-          <p className="lan-supporting">最多 20 个文件，单个文件不超过 2 GB；文件会依次直连传输。</p>
+          <p className="lan-supporting">最多 20 个文件，单个文件不超过 2 GB；文件会依次直连传输。建议手机和电脑连接同一局域网的 5 GHz Wi-Fi。</p>
           {selectionError && <p className="lan-selection-error" role="alert">{selectionError}</p>}
         </section>
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+	"github.com/google/uuid"
 
 	"transdot.local/transfer-assistant/server/internal/deviceauth"
 	"transdot.local/transfer-assistant/server/internal/lantransfer"
@@ -42,11 +43,12 @@ func websocketEndpoint(
 
 		subscription := hub.Subscribe(device.ID)
 		defer hub.Unsubscribe(subscription)
+		connectionID := uuid.NewString()
 		if lanBroker != nil {
-			defer publishLANDeliveries(hub, lanBroker.Leave(device.ID))
+			defer func() { publishLANDeliveries(hub, lanBroker.LeaveConnection(device.ID, connectionID)) }()
 		}
 		readDone := make(chan error, 1)
-		go readWebsocket(connection, device, hub, lanBroker, readDone)
+		go readWebsocket(connection, device, hub, lanBroker, readDone, connectionID)
 		pingTicker := time.NewTicker(30 * time.Second)
 		defer pingTicker.Stop()
 
@@ -77,7 +79,7 @@ func websocketEndpoint(
 	}
 }
 
-func readWebsocket(connection *websocket.Conn, device deviceauth.Device, hub *realtime.Hub, broker *lantransfer.Broker, done chan<- error) {
+func readWebsocket(connection *websocket.Conn, device deviceauth.Device, hub *realtime.Hub, broker *lantransfer.Broker, done chan<- error, connectionID string) {
 	for {
 		messageType, contents, err := connection.Read(context.Background())
 		if err != nil {
@@ -94,7 +96,7 @@ func readWebsocket(connection *websocket.Conn, device deviceauth.Device, hub *re
 			publishLANError(hub, device.ID, "LAN_SIGNAL_INVALID")
 			continue
 		}
-		lanDevice := lantransfer.Device{ID: device.ID, Type: device.Type}
+		lanDevice := lantransfer.Device{ID: device.ID, Type: device.Type, ConnectionID: connectionID}
 		if signal.Type == lantransfer.SignalReady {
 			publishLANDeliveries(hub, broker.Ready(lanDevice, time.Now().UTC()))
 			continue

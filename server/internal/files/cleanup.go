@@ -188,38 +188,7 @@ func (s *Service) ensureCapacityLocked(ctx context.Context, required int64, now 
 	if used+reserved+required <= s.config.FilePoolMaxBytes {
 		return nil
 	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id FROM files WHERE status = 'available' ORDER BY upload_completed_at, id
-	`)
-	if err != nil {
-		return fmt.Errorf("query capacity eviction candidates: %w", err)
-	}
-	var fileIDs []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return fmt.Errorf("scan capacity eviction candidate: %w", err)
-		}
-		fileIDs = append(fileIDs, id)
-	}
-	rows.Close()
-	for _, fileID := range fileIDs {
-		s.activityMu.Lock()
-		if s.downloads[fileID] > 0 {
-			s.activityMu.Unlock()
-			continue
-		}
-		reclaimed, expireErr := s.expireFileLocked(ctx, fileID, "capacity", now)
-		s.activityMu.Unlock()
-		if expireErr != nil {
-			return expireErr
-		}
-		used -= reclaimed
-		if used+reserved+required <= s.config.FilePoolMaxBytes {
-			return nil
-		}
-	}
+
 	return ErrInsufficientStorage
 }
 
