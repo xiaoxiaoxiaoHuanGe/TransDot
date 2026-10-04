@@ -1,279 +1,124 @@
-# TransDot 传输助手 v1.2.0
+<h1 align="center">TransDot</h1>
 
-TransDot 是一个自托管的 Android 与 Web 文件传输工具。服务端、SQLite 数据库、消息和上传文件都保存在你自己的 Docker 数据卷中，不需要注册账号或接入第三方云盘。
+<p align="center">在自己的服务器上，连接手机与浏览器的文字、图片和文件。</p>
 
-## 核心功能
+<p align="center">
+  <a href="https://github.com/xiaoxiaoxiaoHuanGe/TransDot/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/xiaoxiaoxiaoHuanGe/TransDot?style=flat-square"></a>
+  <img alt="Android 6.0+" src="https://img.shields.io/badge/Android-6.0%2B-526273?style=flat-square">
+  <img alt="Docker Compose" src="https://img.shields.io/badge/Docker-Compose-526273?style=flat-square">
+</p>
 
-- Android 与 Web 在同一条时间线中收发文字、图片和文件。
-- Web 支持选择、拖放和粘贴文件，支持搜索、批量选择与批量保存。
-- 同一服务器可同时授权多个浏览器；Android 可查看、重命名和逐个撤销浏览器授权。
-- Android 支持多个服务器档案、默认保存目录、传输通知和自动接收。
-- 首次部署通过 Web 二维码绑定 Android Master，无需手动输入密钥。
-- APP 重装后可在 Web 点击“重新绑定手机”，新 APP 扫码后自动恢复连接；旧手机凭据立即失效。
-- Android 与最新版 Chrome/Edge 位于同一局域网时，可使用 WebRTC 局域网快传，文件内容不经过云服务器。
-- 普通代码升级保留服务器身份、设备绑定、消息和文件，不需要重新初始化。
+<p align="center">
+  <a href="https://github.com/xiaoxiaoxiaoHuanGe/TransDot/releases/latest">下载 Android APP</a> ·
+  <a href="#快速开始">快速开始</a> ·
+  <a href="docs/USAGE.md">部署与使用</a> ·
+  <a href="https://github.com/xiaoxiaoxiaoHuanGe/TransDot/issues">反馈问题</a>
+</p>
 
-## 运行条件
+---
 
-| 场景 | 要求 |
+TransDot 是自托管的 **Android ↔ Web 文件传输工具**，由 Go 服务端、React 网页和原生 Android APP 组成。
+消息、SQLite 数据库和上传文件保存在你的服务器；设备通过二维码配对，无需注册第三方账号。
+
+## 可以做什么
+
+| 功能 | 使用方式 |
 | --- | --- |
-| 云服务器 | Linux、Docker、Docker Compose；推荐使用 1Panel 管理 HTTPS 反向代理。 |
-| 本地调试 | Windows/Linux/macOS、Docker Desktop 或 Docker Engine。 |
-| Android | Android 6.0 及以上。正式 APK 只连接 HTTPS 服务。 |
-| Web | 最新版 Chrome 或 Edge；局域网快传的目录授权依赖 File System Access API。 |
+| 💬 共享时间线 | 收发文字、图片和文件，全文搜索并定位上下文 |
+| 📂 批量传输 | Web 支持选择、拖放和粘贴文件；Android 支持多文件及默认保存目录 |
+| 🔗 设备配对 | 首次扫码初始化，授权多个浏览器，查看及撤销设备权限 |
+| 📱 重绑手机 | 已授权 Web 生成重绑二维码，APP 重装后恢复连接并轮换旧凭据 |
+| ⚡ 局域网快传 | Android 与最新版 Chrome/Edge 同网时，通过 WebRTC 直接传文件 |
+| 💾 备份恢复 | Linux 宿主机脚本创建一致性备份，恢复前验证并保留安全备份 |
 
-正式 APK 从 [GitHub Releases](https://github.com/xiaoxiaoxiaoHuanGe/TransDot/releases) 下载。每个版本同时提供体积较小的 `arm64-v8a` 包（适合绝大多数现代安卓手机）和兼容 32 位 ARM、x86、x86_64 的 `universal` 通用包；不确定设备架构时选择通用包。
+云端时间线使用服务器存储；局域网快传只经服务器交换信令，文件内容直接在设备之间传输。
 
-## 1Panel 云服务器部署
+## 快速开始
 
-推荐链路：
+### 1. 部署服务
 
-```text
-手机/浏览器 -> HTTPS 域名或可信 IP 证书 -> 1Panel 反向代理 -> 127.0.0.1:5757 -> TransDot
-```
+Linux 服务器需要 Docker 和 Docker Compose。克隆后编辑 `.env`：
 
-### 1. 获取项目
-
-```bash
-cd /opt
+```sh
 git clone https://github.com/xiaoxiaoxiaoHuanGe/TransDot.git transdot
-cd /opt/transdot
+cd transdot
 cp .env.example .env
-nano .env
 ```
 
-### 2. 配置 `.env`
-
-公网部署至少设置：
+为反向代理设置以下内容，将域名替换为自己的 HTTPS 入口：
 
 ```env
 HOST_BIND=127.0.0.1
 HOST_PORT=5757
 PUBLIC_URL=https://transdot.example.com
-GOPROXY=https://goproxy.cn,direct
 OWNER_SETUP_TOKEN=
 ```
 
-- `PUBLIC_URL` 必须是手机实际访问的 HTTPS Origin，不能包含路径、查询参数或业务路由。
-- 使用可信 IP 证书时可以填写 `https://服务器公网IP`。
-- `OWNER_SETUP_TOKEN` 是可选手动恢复密钥；设置时至少 32 位。二维码初始化不需要它。
-- `.env` 包含私密配置，禁止提交到 Git。
+`PUBLIC_URL` 只填 HTTPS Origin，不带业务路径、查询参数或片段。
+`OWNER_SETUP_TOKEN` 可留空，首次扫码不需要它；如设置手动恢复密钥，需至少 32 个随机字符。
+需要 Go 下载代理时，可设置 `GOPROXY=https://goproxy.cn,direct`。
 
-### 3. 启动服务
-
-```bash
+```sh
 docker compose -p transdot up -d --build
-docker compose -p transdot ps
-curl http://127.0.0.1:5757/healthz
+curl --fail http://127.0.0.1:5757/healthz
 ```
 
-正常响应：
+健康检查应返回 `{"status":"ok"}`。将 1Panel 或其他反向代理指向 `http://127.0.0.1:5757`，
+配置可信 HTTPS 证书和 WebSocket；公开地址需与 `PUBLIC_URL` 一致。
+详细配置及非标准端口示例见 [部署与使用](docs/USAGE.md)。
 
-```json
-{"status":"ok"}
-```
+### 2. 安装并配对
 
-若构建卡在 Go 依赖下载，确认 `.env` 中存在：
+从 [Releases](https://github.com/xiaoxiaoxiaoHuanGe/TransDot/releases/latest) 下载 APK，系统要求 **Android 6.0+**。
+`arm64-v8a` 包适合现代 ARM64 手机；不确定架构时选择 `universal` 包。正式 APK 要求 HTTPS。
 
-```env
-GOPROXY=https://goproxy.cn,direct
-```
+1. 浏览器打开服务地址，在未初始化页面查看一次性二维码。
+2. APP 点击“扫码连接服务器”，核对地址和实例指纹后确认。
+3. APP 保存 Android Master 凭据，Web 进入时间线。
+4. 添加其他浏览器时，在 APP 选择“添加浏览器”，扫码或输入浏览器显示的 6 位备用码。
 
-### 4. 配置 1Panel HTTPS
+默认最多同时授权 10 个浏览器；二维码默认有效期 120 秒，仅可使用一次。
+APP 重装后，可从已授权 Web 点击“重新绑定手机”，详见 [重绑步骤](docs/USAGE.md#app-重装后重新绑定)。
 
-1. 进入 `网站 -> 创建网站 -> 反向代理`。
-2. 代理目标填写 `http://127.0.0.1:5757`。
-3. 开启 WebSocket。
-4. 配置域名证书或可信 IP 证书，并开启强制 HTTPS。
-5. 外部 HTTPS 地址必须与 `.env` 的 `PUBLIC_URL` 完全一致。
+## 存储与使用边界
 
-非标准 HTTPS 端口需要保留 Host 端口：
+> [!IMPORTANT]
+> 普通更新使用 `sh docker/update.sh`。`docker compose down -v` 和 `sh docker/reset.sh RESET` 会删除数据卷，不能作为升级步骤。
 
-```nginx
-proxy_set_header Host $http_host;
-proxy_set_header Upgrade $http_upgrade;
-proxy_set_header Connection "upgrade";
-```
+- 数据卷为 `transfer-assistant-data`，对应容器 `/app/data`；更新保留数据与设备授权。
+- 云端默认单文件 300 MiB、单批 500 MiB / 20 个文件，文件池 1 GiB；图片和附件默认保留 30 天。
+- 局域网快传单文件最多 2 GiB、单批 20 个文件，完成后校验 SHA-256；不支持续传或云端回退。
+- 快传使用 Host ICE，不使用 STUN/TURN；访客网络、AP 隔离、VPN 和防火墙可能阻止直连。
+- Android 在后台关闭时间线 WebSocket，回到前台重新同步；不承诺 APP 关闭时实时接收消息。
+- `.env`、设备凭据和备份含私有信息，不应上传公开仓库。备份包含消息、文件及部分 Token 哈希，需妥善保管。
 
-## 本地 Docker 部署
+<details>
+<summary>本地 Docker 与开发检查</summary>
+
+本地可使用 Docker Desktop / Engine。复制 `.env.example` 后，未设置 `PUBLIC_URL` 时用请求地址作为开发入口。
+浏览器访问 `http://localhost:5757`；手机填写电脑的局域网 IP，HTTP 仅限 Debug APK。
 
 ```powershell
-git clone https://github.com/xiaoxiaoxiaoHuanGe/TransDot.git
-cd TransDot
-Copy-Item .env.example .env
 docker compose -p transdot up -d --build
 Invoke-RestMethod http://localhost:5757/healthz
 ```
 
-浏览器访问 `http://localhost:5757`。正式 APK 不接受 HTTP；本地 HTTP 联调请使用 Debug APK，并在手机中填写电脑的局域网 IP，例如 `http://192.168.1.10:5757`，不要填写 `localhost`。
+从仓库根目录分别进入以下目录执行：
 
-## 首次绑定
-
-1. 浏览器打开服务器的 HTTPS 地址。
-2. 未初始化服务器会显示一次性绑定二维码。
-3. Android APP 点击“扫码连接服务器”，扫描二维码。
-4. 核对服务器地址和实例指纹后确认。
-5. APP 保存 Android Master 凭据，Web 自动进入时间线。
-
-二维码有效期默认 120 秒、只能使用一次，不包含长期 Master Token。服务器初始化后不能再次执行首次绑定。
-
-## APP 重装后重新绑定
-
-只要已授权 Web 浏览器仍可访问服务器，就不需要 Reset：
-
-1. 在 Web 时间线点击“重新绑定手机”。
-2. 新安装的 APP 点击“扫码连接服务器”。
-3. 扫描 Web 二维码并核对地址和实例指纹。
-4. 确认后，新 APP 自动保存新凭据并进入时间线。
-5. 旧 Android Master 凭据立即撤销，Web 端自动返回时间线。
-
-点击“刷新二维码”会立即使旧二维码失效。二维码过期或已使用时，在 Web 重新生成即可。
-
-## 浏览器配对
-
-1. 未配对浏览器打开服务器地址，页面显示二维码和 6 位备用码。
-2. Android APP 点击“添加浏览器”。
-3. 扫描二维码或输入备用码。
-4. 核对浏览器名称并点击“添加浏览器”；新增授权不会使其他浏览器退出。
-
-默认最多同时授权 10 个浏览器，可通过 `MAX_BROWSER_DEVICES` 在 1–50 范围内调整。Android 设置页的“已授权浏览器”可查看授权时间和最近活动、重命名或撤销单个浏览器；浏览器设置中只能修改自己的名称。达到上限时，先在 Android 撤销一个不再使用的设备，再重新配对。
-
-## 局域网快传
-
-局域网快传使用服务器的 HTTPS/WSS 连接交换信令，文件名、大小、哈希和文件内容通过 WebRTC DataChannel 在 Android 与浏览器之间直接传输，不写入服务器数据库或文件卷。
-
-使用步骤：
-
-1. Android 与电脑连接同一个非隔离局域网，并登录同一个 TransDot 实例。
-2. Web 使用最新版 Chrome/Edge，打开“局域网快传”。
-3. Web 首次选择接收文件夹并授权，之后自动接收。
-4. Android 首次选择默认接收文件夹，之后自动接收。
-5. 任一端可多选文件，队列按顺序逐个传输。
-
-限制：
-
-- 每批最多 20 个文件，单文件最大 2 GiB。
-- 使用 64 KiB 分块并在完成前校验 SHA-256。
-- 不支持断点续传；取消、断线或校验失败会删除未完成文件。
-- 8 秒内无法建立直连会明确失败，不会退回云端上传。
-- 只使用 Host ICE，不依赖 STUN/TURN。访客 Wi-Fi、AP 隔离、VPN 或防火墙可能阻止直连。
-
-## 云端时间线限制
-
-| 配置 | 默认值 |
+| 组件 | 检查 |
 | --- | --- |
-| `MAX_FILE_BYTES` | 300 MiB，单文件上限 |
-| `MAX_BATCH_BYTES` | 500 MiB，单批总大小 |
-| `MAX_BATCH_ITEMS` | 20，单批文件数 |
-| `FILE_POOL_MAX_BYTES` | 1 GiB，文件池容量 |
-| `FILE_TTL_HOURS` | 720，原文件保留 30 天 |
-| `FILE_MESSAGE_TTL_DAYS` | 30，缩略图与文件消息保留时间 |
-| `PAIRING_TTL_SECONDS` | 120，二维码/配对码有效期 |
-| `MAX_BROWSER_DEVICES` | 10，活动浏览器授权上限（范围 1–50） |
-| `UPLOAD_SESSION_TTL_MINUTES` | 30，未完成上传会话有效期 |
+| Go 服务端 | `cd server`，`go test ./...` |
+| Web | `cd web`，`npm ci`，`npm test`，`npm run build` |
+| Android | `cd android`，`.\gradlew.bat --no-daemon testDebugUnitTest assembleDebug` |
 
-新上传的图片和附件默认保留 30 天；已有文件沿用原到期时间。文件池满时拒绝新上传，不提前淘汰未到期文件，可手动删除或扩容。
+Android 构建与签名见 [开发说明](android/README.md)，Debug APK 输出到 `android/app/build/outputs/apk/debug/app-debug.apk`。
 
-服务每 5 分钟清理过期上传、临时文件和过期内容。局域网快传不占用云端文件池。
+</details>
 
-## 更新、日志、备份与恢复
+## 文档与许可
 
-普通更新：
+完整的云部署、本地部署、浏览器授权、局域网快传、参数、更新日志查看、备份与恢复命令见 [部署与使用](docs/USAGE.md)。
+维护脚本说明见 [docker/README.md](docker/README.md)。
 
-```bash
-cd /opt/transdot
-sh docker/update.sh
-```
-
-自定义 `HOST_PORT` 时，需要同步指定健康检查地址。例如端口 `3366`：
-
-```bash
-TRANSDOT_HEALTH_URL=http://127.0.0.1:3366/healthz sh docker/update.sh
-```
-
-查看状态和日志：
-
-```bash
-docker compose -p transdot ps
-docker compose -p transdot logs --tail=100 transfer-assistant
-```
-
-正常更新不要执行 Reset，也不要运行 `docker compose down -v`。数据保存在 Docker 卷 `transfer-assistant-data`，升级和容器重建不会删除该卷。
-
-只有明确要删除全部消息、文件、设备凭据和服务器身份时才执行：
-
-```bash
-cd /opt/transdot
-sh docker/reset.sh RESET
-```
-
-### 创建一致性备份
-
-备份脚本会短暂停止应用，校验只读数据库与文件，生成带 `manifest.json` 的归档和相邻 SHA-256 文件，然后恢复执行前的服务状态：
-
-```bash
-cd /opt/transdot
-sh docker/backup.sh /opt/transdot-backups
-```
-
-归档包含服务器身份、设备授权、消息、原始文件和缩略图，不包含 `.env`、证书或 `data/tmp`。文件权限为 `0600`，其中仍含私人消息和不可逆 Token 哈希，建议保存到加密磁盘。启用 `age` 加密时先安装 `age`，再设置收件人；未安装会明确失败，不会降级为明文：
-
-```bash
-AGE_RECIPIENT='age1...' sh docker/backup.sh /opt/transdot-backups
-```
-
-定时任务可直接调用相同命令。默认永不删除旧备份；显式添加 `--keep 7` 才会保留最新 7 份脚本生成的常规备份。
-
-### 验证与恢复
-
-恢复会先校验 SHA-256、归档路径/类型、manifest、schema、SQLite 和文件大小，并在暂存卷通过检查。覆盖固定生产卷前必定创建 `pre-restore-*` 安全备份；目标启动失败时会自动回滚。最后一个参数必须是独立的 `RESTORE`：
-
-```bash
-cd /opt/transdot
-sh docker/restore.sh /opt/transdot-backups/transdot-backup-20260830T112233Z-7F3A91C2.tar.gz RESTORE
-```
-
-恢复是完整覆盖到备份时间点，不会合并消息；当前 `.env` 保持不变。加密归档恢复需设置 `AGE_IDENTITY_FILE`。不要把 Restore 与 Reset 混淆：Restore 有校验、安全备份和回滚，Reset 会永久创建全新实例。
-
-需要只读诊断当前数据卷时，可在服务停止后运行镜像内维护工具：
-
-```bash
-docker run --rm --user 0 --entrypoint /app/transdot-maintenance \
-  -v transfer-assistant-data:/app/data:ro transfer-assistant:local \
-  verify --data-dir /app/data --max-schema 11 --json
-```
-
-## 开发与验证
-
-Go：
-
-```bash
-cd server
-go test ./...
-```
-
-Web：
-
-```bash
-cd web
-npm ci
-npm test
-npm run build
-```
-
-Android Debug APK：
-
-```powershell
-cd android
-.\gradlew.bat --no-daemon testDebugUnitTest assembleDebug
-```
-
-输出：`android/app/build/outputs/apk/debug/app-debug.apk`。
-
-## 技术组成
-
-- 后端：Go、SQLite、FTS5、WebSocket
-- Web：React、TypeScript、Vite
-- Android：Kotlin、Jetpack Compose、Material 3、WebRTC
-- 部署：Docker 多阶段构建、Docker Compose、1Panel HTTPS 反向代理
-- 数据：容器内 `/app/data`，持久化卷 `transfer-assistant-data`
+项目由 [xiaoxiaoxiaoHuanGe](https://github.com/xiaoxiaoxiaoHuanGe) 维护，第三方依赖遵循各自许可证。
+当前仓库未提供源码许可证，公开可读不等于已授予任意使用、修改或分发的许可。
