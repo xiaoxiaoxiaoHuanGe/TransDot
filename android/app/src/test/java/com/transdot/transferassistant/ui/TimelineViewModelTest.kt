@@ -27,6 +27,24 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class TimelineViewModelTest {
+    @Test
+    fun cancellingEditRestoresDraftAndRealtimeUpdatesText() = runTest(dispatcher.scheduler) {
+        val original = message("message-1", "original", "android_master")
+        val repository = FakeTimelineRepository(original)
+        val model = TimelineViewModel(repository, FakeSessionStore())
+        model.start()
+        dispatcher.scheduler.advanceUntilIdle()
+        model.updateDraft("unsent draft")
+        model.beginEdit(original)
+        assertEquals("original", model.uiState.value.draft)
+        model.updateDraft("changed")
+        model.cancelEdit()
+        assertEquals("unsent draft", model.uiState.value.draft)
+        repository.emit(TimelineEvent.Updated(original.copy(textContent = "remote edit", revision = 1)))
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals("remote edit", model.uiState.value.messages.first().textContent)
+        model.stop()
+    }
     private val dispatcher = StandardTestDispatcher()
 
     @Before

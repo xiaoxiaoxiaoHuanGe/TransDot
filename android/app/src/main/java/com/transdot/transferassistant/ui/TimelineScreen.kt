@@ -182,6 +182,8 @@ private fun ActionNoticeOverlay(notice: ActionNotice?, modifier: Modifier = Modi
 
 @Composable
 fun TimelineScreen(
+    onBeginEdit: (TimelineMessage) -> Unit = {},
+    onCancelEdit: () -> Unit = {},
     state: TimelineUiState,
     browserDevicesState: BrowserDevicesUiState,
     ownDeviceId: String,
@@ -227,9 +229,10 @@ fun TimelineScreen(
     onClearBrowserDeviceError: () -> Unit,
     onOpenLanTransfer: () -> Unit,
 ) {
+    val updateModel = LocalAppUpdate.current
+    androidx.compose.runtime.SideEffect { updateModel?.transferBusy = state.isUploading || state.downloadMessageId != null }
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    var attachmentSheet by remember { mutableStateOf(false) }
     var settingsSheet by remember { mutableStateOf(false) }
     var browserDevicesSheet by remember { mutableStateOf(false) }
     var viewer by remember { mutableStateOf<ViewerState?>(null) }
@@ -350,7 +353,10 @@ fun TimelineScreen(
                 onOpenSearch = onOpenSearch,
                 onPairWindows = onPairWindows,
                 onOpenLanTransfer = onOpenLanTransfer,
-                onOpenAttachment = { attachmentSheet = true },
+                onOpenPhoto = { photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                onOpenFile = { filePicker.launch(arrayOf("*/*")) },
+                onBeginEdit = onBeginEdit,
+                onCancelEdit = onCancelEdit,
                 onOpenSettings = { settingsSheet = true },
                 onOpenImages = { images, index -> viewer = ViewerState(images, index) },
                 onDownload = requestDownload,
@@ -366,8 +372,8 @@ fun TimelineScreen(
     state.deleteTargets.takeIf { it.isNotEmpty() }?.let { targets ->
         AlertDialog(
             onDismissRequest = onCancelDelete,
-            title = { Text(if (targets.size > 1) "删除这组 ${targets.size} 条消息？" else "删除这条消息？") },
-            text = { Text(if (targets.all { it.type == "text" }) "删除会同步到 Windows，并从全文搜索中移除。" else "消息、原文件与缩略图会一起删除，无法撤销。") },
+            title = { Text(if (targets.size > 1) "删除所选 ${targets.size} 条消息？" else "删除这条消息？") },
+            text = { Text(if (targets.all { it.type == "text" }) "删除会同步到其他设备，并从全文搜索中移除。" else "包含 ${targets.count { it.type != "text" }} 条附件消息；原文件与缩略图会一起删除，无法撤销。") },
             confirmButton = { TextButton(onClick = onConfirmDelete, enabled = !state.isDeleting) { Text(if (state.isDeleting) "删除中" else "删除") } },
             dismissButton = { TextButton(onClick = onCancelDelete, enabled = !state.isDeleting) { Text("取消") } },
         )
@@ -379,19 +385,6 @@ fun TimelineScreen(
             text = { Text("${state.errorMessage.orEmpty()}\n\n请切换服务器档案，或删除失效档案后重新连接。") },
             confirmButton = { TextButton(onClick = { onClearError(); settingsSheet = true }) { Text("管理服务器") } },
             dismissButton = { TextButton(onClick = onClearError) { Text("稍后") } },
-        )
-    }
-    if (attachmentSheet) {
-        AttachmentSheet(
-            onDismiss = { attachmentSheet = false },
-            onPhotos = {
-                attachmentSheet = false
-                photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-            },
-            onFiles = {
-                attachmentSheet = false
-                filePicker.launch(arrayOf("*/*"))
-            },
         )
     }
     if (settingsSheet) {
@@ -529,7 +522,10 @@ private fun TimelineHome(
     onOpenSearch: () -> Unit,
     onPairWindows: () -> Unit,
     onOpenLanTransfer: () -> Unit,
-    onOpenAttachment: () -> Unit,
+    onOpenPhoto: () -> Unit,
+    onOpenFile: () -> Unit,
+    onBeginEdit: (TimelineMessage) -> Unit,
+    onCancelEdit: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenImages: (List<TimelineMessage>, Int) -> Unit,
     onDownload: (TimelineMessage) -> Unit,
@@ -548,6 +544,20 @@ private fun TimelineHome(
     var unreadCount by remember { mutableIntStateOf(0) }
     var initialPositioned by remember { mutableStateOf(false) }
     var previousNewestMessageId by remember { mutableStateOf<String?>(null) }
+    var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var selecting by remember { mutableStateOf(false) }
+    var actionTargets by remember { mutableStateOf<List<TimelineMessage>>(emptyList()) }
+    BackHandler(enabled = selecting || state.editing != null) { if (selecting) { selecting = false; selectedIds = emptySet() } else onCancelEdit() }
+    LaunchedEffect(state.messages) { selectedIds = selectedIds.intersect(state.messages.map { it.id }.toSet()) }
+    if (actionTargets.isNotEmpty()) {
+        AlertDialog(onDismissRequest = { actionTargets = emptyList() }, title = { Text("消息操作") }, text = {
+            Column {
+                if (actionTargets.size == 1 && actionTargets.first().type == "text") TextButton(onClick = { onBeginEdit(actionTargets.first()); actionTargets = emptyList() }) { Text("编辑文本") }
+                TextButton(onClick = { selecting = true; selectedIds = actionTargets.map { it.id }.toSet(); actionTargets = emptyList() }) { Text("多选消息") }
+                TextButton(onClick = { onRequestDelete(actionTargets); actionTargets = emptyList() }) { Text("删除") }
+            }
+        }, confirmButton = { TextButton(onClick = { actionTargets = emptyList() }) { Text("关闭") } })
+    }
     var knownMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var wasUploading by remember { mutableStateOf(false) }
     var wasDeleting by remember { mutableStateOf(false) }
@@ -566,7 +576,11 @@ private fun TimelineHome(
         wasUploading = state.isUploading
     }
     LaunchedEffect(state.isDeleting, state.errorMessage) {
-        if (wasDeleting && !state.isDeleting && state.deleteTargets.isEmpty() && state.errorMessage == null) onShowActionNotice("消息已删除")
+        if (wasDeleting && !state.isDeleting && state.deleteTargets.isEmpty() && state.errorMessage == null) {
+            onShowActionNotice("消息已删除")
+            selecting = false
+            selectedIds = emptySet()
+        }
         wasDeleting = state.isDeleting
     }
 
@@ -641,8 +655,23 @@ private fun TimelineHome(
     }
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
-        topBar = { TimelineTopBar(activeServerName, state.connectionState, onPairWindows, onOpenLanTransfer, onOpenSearch, onOpenSettings) },
-        bottomBar = { MessageComposer(state.draft, state.isSending, state.errorMessage, onDraftChange, onSend, onOpenAttachment) },
+        topBar = { Column {
+            TimelineTopBar(activeServerName, state.connectionState, onPairWindows, onOpenLanTransfer, onOpenSearch, onOpenSettings)
+            PendingHistoryNotice()
+            if (selecting) Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("已选 "+selectedIds.size, Modifier.weight(1f))
+                TextButton(onClick = { selectedIds = if (selectedIds.size == state.messages.size) emptySet() else state.messages.map { it.id }.toSet() }) { Text("全选已加载") }
+                TextButton(onClick = { onRequestDelete(state.messages.filter { it.id in selectedIds }) }, enabled = selectedIds.isNotEmpty() && !state.isDeleting) { Text("删除") }
+                TextButton(onClick = { selecting = false; selectedIds = emptySet() }) { Text("退出") }
+            }
+        } },
+        bottomBar = { Column {
+            state.editing?.let { editing -> Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("正在编辑："+editing.textContent.orEmpty().take(32), Modifier.weight(1f), maxLines = 1)
+                TextButton(onClick = onCancelEdit, enabled = !state.isSending) { Text("取消编辑") }
+            } }
+            MessageComposer(state.draft, state.isSending, state.errorMessage, onDraftChange, onSend, onOpenPhoto, onOpenFile, state.editing != null)
+        } },
     ) { innerPadding ->
         Box(Modifier.fillMaxSize().padding(innerPadding)) {
             when {
@@ -664,6 +693,13 @@ private fun TimelineHome(
                         }
                     }
                     items(groups, key = MessageGroup::key) { group ->
+                      Column {
+                        if (selecting) group.messages.forEach { item ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                androidx.compose.material3.Checkbox(checked = item.id in selectedIds, onCheckedChange = { selectedIds = if (item.id in selectedIds) selectedIds - item.id else selectedIds + item.id })
+                                Text(item.textContent?.take(36) ?: item.file?.originalFilename ?: "消息", maxLines = 1)
+                            }
+                        }
                         if (group.messages.first().type == "image") {
                             ImageGroup(
                                 messages = group.messages,
@@ -672,7 +708,7 @@ private fun TimelineHome(
                                 loadImage = loadImage,
                                 onOpen = { onOpenImages(group.messages, it) },
                                 onCopy = { copyMessages(group.messages) },
-                                onDelete = { onRequestDelete(group.messages) },
+                                onDelete = { actionTargets = group.messages },
                             )
                         } else {
                             MessageBubble(
@@ -680,10 +716,11 @@ private fun TimelineHome(
                                 own = group.messages.first().sourceDeviceId == ownDeviceId,
                                 highlighted = group.messages.first().id == state.highlightedMessageId,
                                 onCopy = { copyMessages(group.messages) },
-                                onDelete = { onRequestDelete(group.messages) },
+                                onDelete = { actionTargets = group.messages },
                                 onDownload = { onDownload(group.messages.first()) },
                             )
                         }
+                      }
                     }
                     if (state.uploads.isNotEmpty()) {
                         items(state.uploads, key = UploadProgress::uploadId) { upload -> UploadCard(upload, onRetryUpload) }

@@ -76,7 +76,7 @@ MANIFEST=$(tr -d '\n' <"$TEMP_DIR/manifest.json")
 [ "$(json_field data_layout "$MANIFEST")" = '"transdot-data-v1"' ] || fail "unsupported backup data layout"
 SCHEMA=$(json_field schema_version "$MANIFEST")
 case "$SCHEMA" in ''|*[!0-9]*) fail "invalid backup schema";; esac
-[ "$SCHEMA" -le 11 ] || fail "BACKUP_SCHEMA_TOO_NEW"
+[ "$SCHEMA" -le 12 ] || fail "BACKUP_SCHEMA_TOO_NEW"
 MANIFEST_INSTANCE=$(json_field instance_id "$MANIFEST")
 MANIFEST_FINGERPRINT=$(json_field instance_fingerprint "$MANIFEST")
 
@@ -91,7 +91,7 @@ docker volume create "$STAGE_CANDIDATE" >/dev/null
 STAGE_VOLUME=$STAGE_CANDIDATE
 docker run --rm --user 0 --entrypoint /bin/sh -v "$STAGE_VOLUME:/app/data" -v "$PLAIN_ARCHIVE:/backup/archive.tar.gz:ro" \
   "$IMAGE" -c 'tar -xzf /backup/archive.tar.gz -C /app/data --strip-components=1 && chown -R 10001:10001 /app/data'
-STAGE_REPORT=$(docker run --rm --user 0 --entrypoint /app/transdot-maintenance -v "$STAGE_VOLUME:/app/data:ro" "$IMAGE" verify --data-dir /app/data --max-schema 11 --json)
+STAGE_REPORT=$(docker run --rm --user 0 --entrypoint /app/transdot-maintenance -v "$STAGE_VOLUME:/app/data:ro" "$IMAGE" verify --data-dir /app/data --max-schema 12 --json)
 [ "$(json_field schema_version "$STAGE_REPORT")" = "$SCHEMA" ] || fail "manifest schema does not match staged database"
 [ "$(json_field instance_id "$STAGE_REPORT")" = "$MANIFEST_INSTANCE" ] || fail "manifest instance ID does not match staged database"
 [ "$(json_field instance_fingerprint "$STAGE_REPORT")" = "$MANIFEST_FINGERPRINT" ] || fail "manifest fingerprint does not match staged database"
@@ -126,7 +126,7 @@ if ! copy_stage_to_production; then RESTORE_OK=0; fi
 if [ "$RESTORE_OK" = "1" ] && { ! start_service || ! wait_for_health; }; then RESTORE_OK=0; fi
 if [ "$RESTORE_OK" = "1" ]; then
   stop_service
-  if ! docker run --rm --user 0 --entrypoint /app/transdot-maintenance -v "$VOLUME_NAME:/app/data:ro" "$IMAGE" verify --data-dir /app/data --max-schema 11 --json >/dev/null; then RESTORE_OK=0; fi
+  if ! docker run --rm --user 0 --entrypoint /app/transdot-maintenance -v "$VOLUME_NAME:/app/data:ro" "$IMAGE" verify --data-dir /app/data --max-schema 12 --json >/dev/null; then RESTORE_OK=0; fi
   if [ "$RESTORE_OK" = "1" ] && [ "$WAS_RUNNING" = "1" ]; then start_service; wait_for_health || RESTORE_OK=0; fi
 fi
 

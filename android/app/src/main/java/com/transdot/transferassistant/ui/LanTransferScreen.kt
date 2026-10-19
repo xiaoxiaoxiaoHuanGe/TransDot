@@ -55,6 +55,8 @@ fun LanTransferScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val updateModel = LocalAppUpdate.current
+    androidx.compose.runtime.SideEffect { updateModel?.transferBusy = state.items.any { it.status == LanTransferStatus.Transferring } }
     BackHandler(onBack = onBack)
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isNotEmpty()) onFilesSelected(uris)

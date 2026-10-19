@@ -50,7 +50,7 @@ case "$OUTPUT_DIR/" in "$VOLUME_MOUNT/"*) fail "backup directory must not be ins
 IMAGE=$(current_image)
 if service_is_running; then WAS_RUNNING=1; SERVICE_STOPPED=1; stop_service; fi
 
-VERIFY_JSON=$(docker run --rm --user 0 --entrypoint /app/transdot-maintenance -v "$VOLUME_NAME:/app/data:ro" "$IMAGE" verify --data-dir /app/data --max-schema 11 --json)
+VERIFY_JSON=$(docker run --rm --user 0 --entrypoint /app/transdot-maintenance -v "$VOLUME_NAME:/app/data:ro" "$IMAGE" verify --data-dir /app/data --max-schema 12 --json)
 INSPECT_JSON=$(docker run --rm --user 0 --entrypoint /app/transdot-maintenance -v "$VOLUME_NAME:/app/data:ro" "$IMAGE" inspect --data-dir /app/data --json)
 SCHEMA=$(json_field schema_version "$INSPECT_JSON")
 INSTANCE_ID=$(json_field instance_id "$INSPECT_JSON")

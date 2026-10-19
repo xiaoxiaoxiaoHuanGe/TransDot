@@ -1,3 +1,4 @@
+import { ThemeSwitch } from './ThemeSwitch'
 import { ChangeEvent, ClipboardEvent, DragEvent, FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
 import { LanTransferView } from './lan/LanTransferView'
@@ -58,6 +59,8 @@ type AuthSession = {
 }
 
 type TimelineMessage = {
+  revision?: number
+  edited_at?: string
   id: string
   type: 'text' | 'image' | 'file'
   batch_id: string | null
@@ -564,14 +567,33 @@ function App() {
 
       <footer>
         <span>Private · Self-hosted</span>
-        <span>V1 Complete</span>
+        <ThemeSwitch />
       </footer>
     </div>
   )
 }
 
+type HistoryAccess = { device_id: string, allowed: boolean, status: string }
+
 function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSession: AuthSession, onSessionInvalid: () => void, onRebindPhone: () => void }) {
+  const [editing, setEditing] = useState<TimelineMessage | null>(null)
+  const savedDraft = useRef('')
+  const [selecting, setSelecting] = useState(false)
+  const [selectedIDs, setSelectedIDs] = useState<Set<string>>(new Set())
+  const [history, setHistory] = useState<HistoryAccess | null>(null)
+  const [historyBusy, setHistoryBusy] = useState(false)
+  const [editSupported, setEditSupported] = useState(false)
   const [lanOpen, setLanOpen] = useState(false)
+  useEffect(() => { void request<{ capabilities?: string[] }>('/api/v1/instance/info').then((info) => setEditSupported(info.capabilities?.includes('message_edit_v1') ?? false)).catch(() => {}) }, [])
+  const requestHistory = async () => {
+    setHistoryBusy(true)
+    try { setHistory(await request<HistoryAccess>('/api/v1/history/request', { method: 'POST' })) }
+    catch (error) { setErrorMessage(error instanceof Error ? error.message : '申请失败，请重试') }
+    finally { setHistoryBusy(false) }
+  }
+  const beginEdit = (message: TimelineMessage) => { if (!editing) savedDraft.current = draft; setEditing(message); setDraft(message.text_content || '') }
+  const cancelEdit = () => { setEditing(null); setDraft(savedDraft.current) }
+  const toggleSelection = (id: string) => setSelectedIDs((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next })
   const [messages, setMessages] = useState<TimelineMessage[]>([])
   const [nextBefore, setNextBefore] = useState('')
   const [draft, setDraft] = useState('')
@@ -616,6 +638,33 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
   const scrollRequestIDRef = useRef(0)
   const uploadedFileFingerprintCountsRef = useRef<Map<string, number>>(new Map())
   const batchDownloadAbortRef = useRef<AbortController | null>(null)
+  const accessEpoch = useRef(0)
+  const historyAllowed = useRef<boolean | null>(null)
+  const editingRef = useRef(editing)
+  editingRef.current = editing
+
+  const reconcileHistory = useCallback((access: HistoryAccess) => {
+    setHistory(access)
+    const changed = historyAllowed.current !== null && historyAllowed.current !== access.allowed
+    historyAllowed.current = access.allowed
+    if (!changed) return false
+    accessEpoch.current += 1
+    bufferedEventsRef.current = []
+    knownMessageIDsRef.current = new Set()
+    setMessages([]); setNextBefore(''); setSearchResults([]); setViewer(null)
+    setDeleteTargets([]); setSelectedIDs(new Set()); setSelecting(false)
+    setSelectedDownloadIDs(new Set()); setDownloadSelectionOpen(false)
+    if (editingRef.current) { setDraft(savedDraft.current); setEditing(null) }
+    return true
+  }, [])
+
+  useEffect(() => {
+    void request<HistoryAccess>('/api/v1/history').then(reconcileHistory).catch(() => {})
+  }, [reconcileHistory])
+
+  useEffect(() => {
+    setSelectedIDs((current) => new Set([...current].filter((id) => messages.some((message) => message.id === id))))
+  }, [messages])
 
   useEffect(() => {
     if (!actionNotice) return
@@ -672,11 +721,33 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
   const applyRealtimeEvent = useCallback((event: RealtimeEnvelope) => {
     if (event.type === 'message.created' && isTimelineMessage(event.data)) {
       acceptCreatedMessage(event.data)
+    } else if (event.type === 'message.updated' && isTimelineMessage(event.data)) {
+      const changed = event.data
+      setMessages((current) => current.map((message) => message.id === changed.id ? changed : message))
+      setSearchResults([])
+    } else if (event.type === 'history.changed') {
+      const access = event.data as HistoryAccess
+      if (access.device_id === authSession.device_id) {
+        if (reconcileHistory(access)) {
+          const epoch = accessEpoch.current
+          void request<MessagePage>('/api/v1/messages?limit=50').then((page) => {
+            if (epoch !== accessEpoch.current) return
+            knownMessageIDsRef.current = new Set(page.messages.map((message) => message.id))
+            setMessages(page.messages); setNextBefore(page.next_before || '')
+          }).catch(() => setErrorMessage('历史权限已变化，请重新加载时间线'))
+        }
+      }
     } else if (event.type === 'message.deleted') {
       const messageID = (event.data as { message_id?: unknown })?.message_id
       if (typeof messageID === 'string') {
         setMessages((current) => current.filter((message) => message.id !== messageID))
         setSearchResults((current) => current.filter((message) => message.id !== messageID))
+        setDeleteTargets((current) => current.filter((message) => message.id !== messageID))
+        setSelectedIDs((current) => { const next = new Set(current); next.delete(messageID); return next })
+        if (editingRef.current?.id === messageID) {
+          setEditing(null)
+          setErrorMessage('编辑的消息已删除，输入内容已保留。')
+        }
       }
     } else if (event.type === 'file.expired') {
       const messageID = (event.data as { message_id?: unknown })?.message_id
@@ -700,13 +771,16 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
         setDeviceNameDraft(update.display_name)
       }
     }
-  }, [acceptCreatedMessage, authSession.device_id, onSessionInvalid])
+  }, [acceptCreatedMessage, authSession.device_id, onSessionInvalid, reconcileHistory])
 
   const loadLatest = useCallback(async (signal?: AbortSignal) => {
     synchronizingRef.current = true
     bufferedEventsRef.current = []
     try {
+      await request<HistoryAccess>('/api/v1/history', { signal }).then(reconcileHistory).catch(() => {})
+      const epoch = accessEpoch.current
       const page = await request<MessagePage>('/api/v1/messages?limit=50', { signal })
+      if (epoch !== accessEpoch.current || signal?.aborted) return
       const firstSync = !initialSyncCompleteRef.current
       const newMessages = page.messages.filter((message) => !knownMessageIDsRef.current.has(message.id))
       knownMessageIDsRef.current = new Set(page.messages.map((message) => message.id))
@@ -730,9 +804,10 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
       synchronizingRef.current = false
       const buffered = bufferedEventsRef.current
       bufferedEventsRef.current = []
-      buffered.forEach(applyRealtimeEvent)
+      const epoch = accessEpoch.current
+      for (const event of buffered) { applyRealtimeEvent(event); if (epoch !== accessEpoch.current) break }
     }
-  }, [applyRealtimeEvent, authSession.device_id, handleAuthError, requestScrollToBottom])
+  }, [applyRealtimeEvent, authSession.device_id, handleAuthError, requestScrollToBottom, reconcileHistory])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -793,8 +868,10 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
   const loadOlder = async () => {
     if (!nextBefore || loadingOlder) return
     setLoadingOlder(true)
+    const epoch = accessEpoch.current
     try {
       const page = await request<MessagePage>(`/api/v1/messages?limit=50&before=${encodeURIComponent(nextBefore)}`)
+      if (epoch !== accessEpoch.current) return
       page.messages.forEach((message) => knownMessageIDsRef.current.add(message.id))
       setMessages((current) => mergeMessages(page.messages, current))
       setNextBefore(page.next_before || '')
@@ -808,18 +885,34 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
   const sendMessage = async () => {
     const byteLength = new TextEncoder().encode(draft).length
     if (!draft.trim() || sending || byteLength > 100 * 1024) return
+    const epoch = accessEpoch.current
     setSending(true)
     setErrorMessage('')
     try {
-      const created = await request<TimelineMessage>('/api/v1/messages/text', {
-        method: 'POST',
+      const created = await request<TimelineMessage>(editing ? `/api/v1/messages/${encodeURIComponent(editing.id)}` : '/api/v1/messages/text', {
+        method: editing ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json; charset=utf-8' },
-        body: JSON.stringify({ text: draft }),
+        body: JSON.stringify(editing ? { text: draft, revision: editing.revision ?? 0 } : { text: draft }),
       })
-      acceptCreatedMessage(created)
-      setDraft('')
+      if (epoch !== accessEpoch.current) return
+      if (editing) {
+        setMessages((current) => current.map((message) => message.id === created.id ? created : message))
+        setSearchResults([])
+        setEditing(null)
+        setDraft(savedDraft.current)
+      } else {
+        acceptCreatedMessage(created)
+        setDraft('')
+      }
     } catch (error) {
-      if (!handleAuthError(error)) setErrorMessage(error instanceof Error ? error.message : '发送失败。')
+      if (!handleAuthError(error)) {
+        setErrorMessage(error instanceof Error ? error.message : '发送失败。')
+        if (editing && error instanceof ApiError && error.code === 'MESSAGE_CONFLICT') {
+          void request<{ messages: TimelineMessage[] }>(`/api/v1/messages/${encodeURIComponent(editing.id)}/context`)
+            .then((response) => { if (epoch === accessEpoch.current) setMessages((current) => mergeMessages(current, response.messages)) })
+            .catch(() => {})
+        }
+      }
     } finally {
       setSending(false)
     }
@@ -836,18 +929,26 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
     if (deleteTargets.length === 0 || deleting) return
     setDeleting(true)
     const targets = [...deleteTargets]
+    const epoch = accessEpoch.current
     try {
-      const results = await Promise.allSettled(targets.map((target) =>
-        request<void>(`/api/v1/messages/${encodeURIComponent(target.id)}`, { method: 'DELETE' }),
-      ))
+      const results: PromiseSettledResult<void>[] = []
+      for (let offset = 0; offset < targets.length; offset += 4) {
+        results.push(...await Promise.allSettled(targets.slice(offset, offset + 4).map((target) =>
+          request<void>(`/api/v1/messages/${encodeURIComponent(target.id)}`, { method: 'DELETE' }),
+        )))
+      }
+      if (epoch !== accessEpoch.current) return
       const deletedIDs = new Set(targets.filter((_, index) => results[index].status === 'fulfilled').map((target) => target.id))
       const failedTargets = targets.filter((_, index) => results[index].status === 'rejected')
       if (deletedIDs.size > 0) {
         setMessages((current) => current.filter((message) => !deletedIDs.has(message.id)))
         setSearchResults((current) => current.filter((message) => !deletedIDs.has(message.id)))
+        setSelectedIDs((current) => new Set([...current].filter((id) => !deletedIDs.has(id))))
       }
       if (failedTargets.length === 0) {
         setDeleteTargets([])
+        setSelectedIDs(new Set())
+        setSelecting(false)
         setActionNotice(targets.length > 1 ? `已删除 ${targets.length} 条消息` : '消息已删除')
       } else {
         const firstFailure = results.find((result) => result.status === 'rejected')
@@ -879,9 +980,11 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
   const submitSearch = async (event: FormEvent) => {
     event.preventDefault()
     if (!searchQuery.trim() || searching) return
+    const epoch = accessEpoch.current
     setSearching(true)
     try {
       const response = await request<{ results: TimelineMessage[] }>(`/api/v1/search?q=${encodeURIComponent(searchQuery)}`)
+      if (epoch !== accessEpoch.current) return
       setSearchResults(response.results)
     } catch (error) {
       if (!handleAuthError(error)) setErrorMessage(error instanceof Error ? error.message : '搜索失败。')
@@ -891,10 +994,12 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
   }
 
   const locateSearchResult = async (messageID: string) => {
+    const epoch = accessEpoch.current
     try {
       const response = await request<{ target_message_id: string, messages: TimelineMessage[] }>(
         `/api/v1/messages/${encodeURIComponent(messageID)}/context`,
       )
+      if (epoch !== accessEpoch.current) return
       knownMessageIDsRef.current = new Set(response.messages.map((message) => message.id))
       setMessages(response.messages)
       setNextBefore('')
@@ -1168,6 +1273,7 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
           </div>
         </div>
         <div className="timeline-actions">
+          <ThemeSwitch />
           <button className="batch-action device-name-command" type="button" onClick={() => setDeviceNameOpen(true)}>
             本设备：{currentDeviceName}
           </button>
@@ -1178,7 +1284,12 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
           <span className={`connection-badge connection-badge--${connection}`}>
             <span />{connection === 'connected' ? '实时连接' : connection === 'connecting' ? '正在连接' : '等待重连'}
           </span>
-          {downloadSelectionOpen ? (
+          {selecting ? <>
+            <button className="batch-action" type="button" title="仅选择当前已加载的消息" onClick={() => setSelectedIDs(selectedIDs.size === messages.length ? new Set() : new Set(messages.map((message) => message.id)))}>全选已加载 / 取消</button>
+            <span className="selection-count">已选 {selectedIDs.size}</span>
+            <button className="batch-action" disabled={!selectedIDs.size || deleting} onClick={() => setDeleteTargets(messages.filter((message) => selectedIDs.has(message.id)))}>删除</button>
+            <button className="batch-action" onClick={() => { setSelecting(false); setSelectedIDs(new Set()) }}>退出</button>
+          </> : downloadSelectionOpen ? (
             <>
               <button
                 className="batch-action"
@@ -1200,6 +1311,7 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
             </>
           ) : (
             <>
+              <button className="batch-action" type="button" onClick={() => setSelecting(true)}>选择消息</button>
               <button className="batch-action" type="button" disabled={downloadableMessages.length === 0} onClick={() => setDownloadSelectionOpen(true)}>批量下载</button>
               <button className="icon-button" type="button" onClick={() => setSearchOpen(true)} aria-label="搜索消息">
                 <SearchIcon />
@@ -1211,6 +1323,7 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
 
       <main className="timeline-main">
         <section ref={timelineListRef} className="timeline-list" aria-live="polite" onScroll={handleTimelineScroll}>
+          {history && !history.allowed && <div className="history-notice" role="status"><span>{history.status === 'pending' ? '已向手机申请，等待同意' : history.status === 'rejected' ? '手机已拒绝申请，更早的消息需重新授权' : '更早的消息需经手机授权'}</span><button className="batch-action" disabled={historyBusy || history.status === 'pending'} onClick={() => void requestHistory()}>申请查看历史</button></div>}
           {nextBefore && (
             <button className="load-older" type="button" onClick={() => void loadOlder()} disabled={loadingOlder}>
               {loadingOlder ? '正在加载…' : '加载更早消息'}
@@ -1237,13 +1350,15 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
                   >
                     <div className="message-meta">
                       <span>{sourceDeviceLabel(message, authSession.device_id)}</span>
-                      <time dateTime={message.created_at}>{formatMessageTime(message.created_at)}</time>
+                      <time dateTime={message.created_at}>{formatMessageTime(message.created_at)}{message.edited_at ? " · 已编辑" : ""}</time>
                     </div>
                     <div className="message-body-line">
-                      {!downloadSelectionOpen && (
+                      {selecting && <div className="message-selection" role="group" aria-label="选择消息">{group.messages.map((item) => <label key={item.id}><input type="checkbox" checked={selectedIDs.has(item.id)} onChange={() => toggleSelection(item.id)} /><span className="visually-hidden">{item.file?.original_filename || item.text_content?.slice(0, 30) || "选择这条消息"}</span></label>)}</div>}
+                      {!downloadSelectionOpen && !selecting && (
                         <MessageActions
                           onCopy={() => void copyMessages(group.messages)}
                           onDelete={() => setDeleteTargets(group.messages)}
+                          onEdit={message.type === 'text' && editSupported ? () => beginEdit(message) : undefined}
                           copyLabel={group.messages.length > 1 ? '复制这组文件名' : '复制消息'}
                           deleteLabel={group.messages.length > 1 ? '删除这组消息' : '删除消息'}
                         />
@@ -1288,6 +1403,7 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
           </button>
         )}
         {errorMessage && <div className="inline-error" role="alert">{errorMessage}</div>}
+        <div className="composer-edit-state">{editing && <><span>正在编辑：{editing.text_content?.slice(0, 70)}</span><button className="batch-action" disabled={sending} onClick={cancelEdit}>取消编辑</button></>}</div>
         <div className="composer">
           <button className="attachment-button" type="button" onClick={() => setAttachmentOpen(true)} title="添加照片或文件">＋</button>
           <textarea
@@ -1307,7 +1423,7 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
             onClick={() => void sendMessage()}
             disabled={!draft.trim() || sending || draftBytes > 100 * 1024}
           >
-            {sending ? '发送中' : '发送'}
+            {sending ? '保存中…' : editing ? '保存修改' : '发送'}
           </button>
         </div>
       </div>
@@ -1414,8 +1530,8 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
       {deleteTargets.length > 0 && (
         <div className="sheet-backdrop sheet-backdrop--center" role="presentation">
           <div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-title">
-            <h2 id="delete-title">{deleteTargets.length > 1 ? `删除这组 ${deleteTargets.length} 条消息？` : '删除这条消息？'}</h2>
-            <p>{deleteTargets.every((target) => target.type === 'text') ? '删除会同步到 Android，并从全文搜索索引中移除。' : '删除会同步移除消息、原文件和缩略图，此操作无法撤销。'}</p>
+            <h2 id="delete-title">{deleteTargets.length > 1 ? `删除所选 ${deleteTargets.length} 条消息？` : '删除这条消息？'}</h2>
+            <p>{deleteTargets.every((target) => target.type === 'text') ? '删除会同步到其他设备，并从全文搜索索引中移除。' : `包含 ${deleteTargets.filter((target) => target.type !== 'text').length} 条附件消息；删除会同步移除消息、原文件和缩略图，此操作无法撤销。`}</p>
             <div>
               <button type="button" onClick={() => setDeleteTargets([])} disabled={deleting}>取消</button>
               <button className="danger-button" type="button" onClick={() => void confirmDelete()} disabled={deleting}>{deleting ? '删除中' : '删除'}</button>
@@ -1457,9 +1573,10 @@ function groupTimelineMessages(messages: TimelineMessage[]): TimelineGroup[] {
   return groups
 }
 
-function MessageActions({ onCopy, onDelete, copyLabel, deleteLabel }: { onCopy: () => void, onDelete: () => void, copyLabel: string, deleteLabel: string }) {
+function MessageActions({ onCopy, onDelete, onEdit, copyLabel, deleteLabel }: { onCopy: () => void, onDelete: () => void, onEdit?: () => void, copyLabel: string, deleteLabel: string }) {
   return (
     <div className="message-actions" aria-label="消息操作">
+      {onEdit && <button type="button" onClick={onEdit} aria-label="编辑文本" title="编辑"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 4 5 5-11 11H4v-5L15 4Z M13 6l5 5" /></svg></button>}
       <button type="button" onClick={onCopy} aria-label={copyLabel} title="复制"><CopyIcon /></button>
       <button className="message-action--delete" type="button" onClick={onDelete} aria-label={deleteLabel} title="删除"><TrashIcon /></button>
     </div>

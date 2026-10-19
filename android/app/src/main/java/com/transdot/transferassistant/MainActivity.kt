@@ -57,6 +57,10 @@ import com.transdot.transferassistant.ui.PairingFlow
 import com.transdot.transferassistant.ui.PairingViewModel
 import com.transdot.transferassistant.ui.SetupScreen
 import com.transdot.transferassistant.ui.SetupViewModel
+import androidx.compose.runtime.CompositionLocalProvider
+import com.transdot.transferassistant.ui.AppUpdateProvider
+import com.transdot.transferassistant.ui.LocalHistorySession
+import com.transdot.transferassistant.ui.LocalHistoryRevision
 import com.transdot.transferassistant.ui.TimelineScreen
 import com.transdot.transferassistant.ui.TimelineViewModel
 import com.transdot.transferassistant.ui.theme.TransferAssistantTheme
@@ -95,6 +99,7 @@ class MainActivity : ComponentActivity() {
             }
 
             TransferAssistantTheme(mode = themeMode) {
+              AppUpdateProvider(showEntry = sessionStore.load() == null) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
@@ -180,6 +185,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+          }
         }
     }
 
@@ -318,7 +324,7 @@ private fun PairingContent(
                     lanOpen = false
                 },
             )
-        } else TimelineScreen(
+        } else CompositionLocalProvider(LocalHistorySession provides sessionStore.load(), LocalHistoryRevision provides timelineUiState.deviceListRevision) { TimelineScreen(
             state = timelineUiState,
             browserDevicesState = browserDevicesUiState,
             ownDeviceId = pairingUiState.deviceId,
@@ -339,6 +345,8 @@ private fun PairingContent(
             onSwitchServer = onSwitchServer,
             onRenameServer = onRenameServer,
             onDeleteServer = onDeleteServer,
+            onBeginEdit = timelineViewModel::beginEdit,
+            onCancelEdit = timelineViewModel::cancelEdit,
             onDraftChange = timelineViewModel::updateDraft,
             onSend = timelineViewModel::sendText,
             onUpload = timelineViewModel::uploadFiles,
@@ -363,7 +371,7 @@ private fun PairingContent(
             onRevokeBrowserDevice = browserDevicesViewModel::revoke,
             onClearBrowserDeviceError = browserDevicesViewModel::clearError,
             onOpenLanTransfer = { lanOpen = true },
-        )
+        ) }
     } else {
         PairingFlow(
             state = pairingUiState,

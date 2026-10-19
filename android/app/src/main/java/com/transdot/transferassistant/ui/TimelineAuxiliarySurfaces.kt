@@ -282,11 +282,8 @@ internal fun SettingsSheetContent(
         ) {
             Text("设置", style = MaterialTheme.typography.headlineSmall)
             Text("外观", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-            Row(horizontalArrangement = Arrangement.spacedBy(AppSpacing.small)) {
-                listOf(ThemeMode.System to "跟随系统", ThemeMode.Light to "浅色", ThemeMode.Dark to "深色").forEach { (value, label) ->
-                    if (mode == value) Button({ onChange(value) }) { Text(label) } else OutlinedButton({ onChange(value) }) { Text(label) }
-                }
-            }
+            ThemeModeSwitch(mode, onChange)
+            AppUpdateEntry()
             HorizontalDivider()
             Text("文件保存", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
             Text(folderLabel?.let { "默认保存位置：$it" } ?: "未设置默认保存位置，每次下载时询问。")

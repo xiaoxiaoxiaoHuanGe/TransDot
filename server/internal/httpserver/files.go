@@ -115,7 +115,7 @@ func serveThumbnail(authService deviceAuthenticator, service fileService, logger
 		w.Header().Set("Content-Type", thumbnail.MIMEType)
 		w.Header().Set("Content-Disposition", "inline")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Cache-Control", "private, max-age=300")
+		w.Header().Set("Cache-Control", "private, no-store")
 		http.ServeContent(w, r, thumbnail.FileID+".jpg", thumbnail.ModTime, thumbnail.Reader)
 	}
 }

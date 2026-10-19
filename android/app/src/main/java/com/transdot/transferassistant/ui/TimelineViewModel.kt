@@ -36,6 +36,7 @@ data class TimelineUiState(
     val messages: List<TimelineMessage> = emptyList(),
     val nextBefore: String? = null,
     val draft: String = "",
+    val editing: TimelineMessage? = null,
     val isInitialLoading: Boolean = true,
     val isLoadingOlder: Boolean = false,
     val isSending: Boolean = false,
@@ -72,6 +73,16 @@ class TimelineViewModel(
     )
     val uiState: StateFlow<TimelineUiState> = mutableUiState.asStateFlow()
 
+    private var savedDraft = ""
+    fun beginEdit(message: TimelineMessage) {
+        if (message.type != "text" || mutableUiState.value.isSending) return
+        if (mutableUiState.value.editing == null) savedDraft = mutableUiState.value.draft
+        mutableUiState.update { it.copy(editing = message, draft = message.textContent.orEmpty(), errorMessage = null) }
+    }
+    fun cancelEdit() {
+        if (mutableUiState.value.isSending) return
+        mutableUiState.update { it.copy(editing = null, draft = savedDraft, errorMessage = null) }
+    }
     private var started = false
     private var connection: RealtimeConnection? = null
     private var connectionGeneration = 0
@@ -106,16 +117,19 @@ class TimelineViewModel(
 
     fun sendText() {
         val activeSession = session ?: return
+        val editing = mutableUiState.value.editing
         val content = mutableUiState.value.draft
         if (content.isBlank() || mutableUiState.value.isSending || content.toByteArray().size > MAX_TEXT_BYTES) return
         mutableUiState.update { it.copy(isSending = true, errorMessage = null) }
         viewModelScope.launch {
-            runCatching { repository.sendText(activeSession, content) }
+            runCatching { if (editing == null) repository.sendText(activeSession, content) else repository.edit(activeSession, editing, content) }
                 .onSuccess { created ->
                     mutableUiState.update {
                         it.copy(
                             messages = mergeMessages(it.messages, listOf(created)),
-                            draft = "",
+                            draft = if (editing == null) "" else savedDraft,
+                            editing = null,
+                            searchResults = if (editing == null) it.searchResults else emptyList(),
                             isSending = false,
                         )
                     }
@@ -390,12 +404,19 @@ class TimelineViewModel(
 
     private fun applyRealtimeEvent(event: TimelineEvent) {
         when (event) {
+            is TimelineEvent.Updated -> mutableUiState.update { state ->
+                state.copy(messages = state.messages.map { if (it.id == event.message.id) event.message else it }, searchResults = emptyList())
+            }
+            TimelineEvent.HistoryChanged -> mutableUiState.update { it.copy(deviceListRevision = it.deviceListRevision + 1) }
             is TimelineEvent.Created -> mutableUiState.update {
                 it.copy(messages = mergeMessages(it.messages, listOf(event.message)))
             }
             is TimelineEvent.Deleted -> mutableUiState.update {
                 it.copy(
                     messages = it.messages.filterNot { message -> message.id == event.messageId },
+                    deleteTargets = it.deleteTargets.filterNot { message -> message.id == event.messageId },
+                    editing = it.editing?.takeUnless { message -> message.id == event.messageId },
+                    errorMessage = if (it.editing?.id == event.messageId) "编辑的消息已删除，输入内容已保留。" else it.errorMessage,
                     searchResults = it.searchResults.filterNot { message -> message.id == event.messageId },
                 )
             }
@@ -429,6 +450,7 @@ class TimelineViewModel(
     }
 
     private fun handleFailure(failure: Throwable, update: (TimelineUiState) -> TimelineUiState = { it }) {
+        if (failure is TimelineFailure.Conflict) refreshLatest()
         if (failure is TimelineFailure.Unauthorized) {
             markCredentialInvalid(failure.message.orEmpty())
             return

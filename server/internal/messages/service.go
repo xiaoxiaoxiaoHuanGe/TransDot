@@ -35,6 +35,8 @@ var (
 )
 
 type Message struct {
+	Revision          int         `json:"revision"`
+	EditedAt          *time.Time  `json:"edited_at,omitempty"`
 	ID                string      `json:"id"`
 	Type              string      `json:"type"`
 	BatchID           *string     `json:"batch_id"`
@@ -139,13 +141,13 @@ func (s *Service) List(ctx context.Context, before string, limit int) (Page, err
 
 	query := `
 		SELECT m.id, m.type, m.batch_id, m.source_device_id, d.device_type, d.display_name,
-		       m.text_content, m.created_at, m.metadata_expires_at,
+		       m.text_content, m.created_at, m.metadata_expires_at, m.revision, m.edited_at,
 		       f.id, f.original_filename, f.mime_type, f.size_bytes, f.status,
 		       f.expires_at, f.expired_reason, f.thumbnail_key
 		FROM messages m
 		JOIN devices d ON d.id = m.source_device_id
 		LEFT JOIN files f ON f.message_id = m.id
-		WHERE m.deleted_at IS NULL`
+		WHERE m.deleted_at IS NULL AND ` + visibility(ctx)
 	arguments := make([]any, 0, 3)
 	if strings.TrimSpace(before) != "" {
 		cursor, err := decodeCursor(before)
@@ -194,7 +196,7 @@ func (s *Service) Delete(ctx context.Context, messageID string) error {
 
 	var exists int
 	if err := tx.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM messages WHERE id = ? AND deleted_at IS NULL
+		SELECT COUNT(*) FROM messages m WHERE id = ? AND deleted_at IS NULL AND `+visibility(ctx)+`
 	`, messageID).Scan(&exists); err != nil {
 		return fmt.Errorf("check message deletion: %w", err)
 	}
@@ -220,14 +222,14 @@ func (s *Service) Search(ctx context.Context, queryText string) ([]Message, erro
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT m.id, m.type, m.batch_id, m.source_device_id, d.device_type, d.display_name,
-		       m.text_content, m.created_at, m.metadata_expires_at,
+		       m.text_content, m.created_at, m.metadata_expires_at, m.revision, m.edited_at,
 		       f.id, f.original_filename, f.mime_type, f.size_bytes, f.status,
 		       f.expires_at, f.expired_reason, f.thumbnail_key
 		FROM message_search_fts
 		JOIN messages m ON m.id = message_search_fts.message_id
 		JOIN devices d ON d.id = m.source_device_id
 		LEFT JOIN files f ON f.message_id = m.id
-		WHERE message_search_fts MATCH ? AND m.deleted_at IS NULL
+		WHERE message_search_fts MATCH ? AND m.deleted_at IS NULL AND `+visibility(ctx)+`
 		ORDER BY bm25(message_search_fts), m.created_at DESC, m.id DESC
 		LIMIT 50
 	`, matchQuery)
@@ -246,12 +248,12 @@ func (s *Service) Context(ctx context.Context, messageID string) (Context, error
 
 	beforeRows, err := s.db.QueryContext(ctx, `
 		SELECT m.id, m.type, m.batch_id, m.source_device_id, d.device_type, d.display_name,
-		       m.text_content, m.created_at, m.metadata_expires_at,
+		       m.text_content, m.created_at, m.metadata_expires_at, m.revision, m.edited_at,
 		       f.id, f.original_filename, f.mime_type, f.size_bytes, f.status,
 		       f.expires_at, f.expired_reason, f.thumbnail_key
 		FROM messages m JOIN devices d ON d.id = m.source_device_id
 		LEFT JOIN files f ON f.message_id = m.id
-		WHERE m.deleted_at IS NULL
+		WHERE m.deleted_at IS NULL AND `+visibility(ctx)+`
 		  AND (m.created_at < ? OR (m.created_at = ? AND m.id < ?))
 		ORDER BY m.created_at DESC, m.id DESC LIMIT 20
 	`, formatTime(target.CreatedAt), formatTime(target.CreatedAt), target.ID)
@@ -266,12 +268,12 @@ func (s *Service) Context(ctx context.Context, messageID string) (Context, error
 
 	afterRows, err := s.db.QueryContext(ctx, `
 		SELECT m.id, m.type, m.batch_id, m.source_device_id, d.device_type, d.display_name,
-		       m.text_content, m.created_at, m.metadata_expires_at,
+		       m.text_content, m.created_at, m.metadata_expires_at, m.revision, m.edited_at,
 		       f.id, f.original_filename, f.mime_type, f.size_bytes, f.status,
 		       f.expires_at, f.expired_reason, f.thumbnail_key
 		FROM messages m JOIN devices d ON d.id = m.source_device_id
 		LEFT JOIN files f ON f.message_id = m.id
-		WHERE m.deleted_at IS NULL
+		WHERE m.deleted_at IS NULL AND `+visibility(ctx)+`
 		  AND (m.created_at > ? OR (m.created_at = ? AND m.id > ?))
 		ORDER BY m.created_at ASC, m.id ASC LIMIT 20
 	`, formatTime(target.CreatedAt), formatTime(target.CreatedAt), target.ID)
@@ -292,12 +294,12 @@ func (s *Service) Context(ctx context.Context, messageID string) (Context, error
 func (s *Service) messageByID(ctx context.Context, messageID string) (Message, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT m.id, m.type, m.batch_id, m.source_device_id, d.device_type, d.display_name,
-		       m.text_content, m.created_at, m.metadata_expires_at,
+		       m.text_content, m.created_at, m.metadata_expires_at, m.revision, m.edited_at,
 		       f.id, f.original_filename, f.mime_type, f.size_bytes, f.status,
 		       f.expires_at, f.expired_reason, f.thumbnail_key
 		FROM messages m JOIN devices d ON d.id = m.source_device_id
 		LEFT JOIN files f ON f.message_id = m.id
-		WHERE m.id = ? AND m.deleted_at IS NULL
+		WHERE m.id = ? AND m.deleted_at IS NULL AND `+visibility(ctx)+`
 	`, messageID)
 	message, err := scanMessage(row.Scan)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -319,9 +321,10 @@ func scanMessage(scan func(...any) error) (Message, error) {
 	var fileID, filename, mimeType, fileStatus, fileExpiresAt, expiredReason, thumbnailKey sql.NullString
 	var fileSize sql.NullInt64
 	var createdAtRaw string
+	var editedAt sql.NullString
 	if err := scan(
 		&message.ID, &message.Type, &batchID, &message.SourceDeviceID,
-		&message.SourceDeviceType, &message.SourceDeviceName, &textContent, &createdAtRaw, &metadataExpiresAt,
+		&message.SourceDeviceType, &message.SourceDeviceName, &textContent, &createdAtRaw, &metadataExpiresAt, &message.Revision, &editedAt,
 		&fileID, &filename, &mimeType, &fileSize, &fileStatus, &fileExpiresAt, &expiredReason, &thumbnailKey,
 	); err != nil {
 		return Message{}, err
@@ -337,6 +340,13 @@ func scanMessage(scan func(...any) error) (Message, error) {
 		return Message{}, fmt.Errorf("parse message created_at: %w", err)
 	}
 	message.CreatedAt = createdAt
+	if editedAt.Valid {
+		parsed, err := time.Parse(time.RFC3339Nano, editedAt.String)
+		if err != nil {
+			return Message{}, err
+		}
+		message.EditedAt = &parsed
+	}
 	if metadataExpiresAt.Valid {
 		parsed, err := time.Parse(time.RFC3339Nano, metadataExpiresAt.String)
 		if err != nil {

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"transdot.local/transfer-assistant/server/migrations"
 )
 
 func TestOpenCreatesDataLayoutAndRunsMigrations(t *testing.T) {
@@ -60,8 +61,8 @@ func TestOpenIsIdempotent(t *testing.T) {
 	if err := db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&applied); err != nil {
 		t.Fatalf("query schema_migrations: %v", err)
 	}
-	if applied != 11 {
-		t.Fatalf("migration count = %d, want 11", applied)
+	if applied != 12 {
+		t.Fatalf("migration count = %d, want 12", applied)
 	}
 }
 
@@ -108,6 +109,13 @@ func TestMultiBrowserMigrationPreservesExistingBrowserAndMasterUniqueness(t *tes
 		rejected_at TEXT,
 		consumed_at TEXT
 	)`); err != nil {
+		t.Fatal(err)
+	}
+	messageSchema, err := migrations.Files.ReadFile("004_messages.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = raw.Exec(string(messageSchema)); err != nil {
 		t.Fatal(err)
 	}
 	for version := 1; version <= 10; version++ {

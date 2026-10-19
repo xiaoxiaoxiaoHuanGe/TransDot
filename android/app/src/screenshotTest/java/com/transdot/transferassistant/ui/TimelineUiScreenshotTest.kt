@@ -49,7 +49,8 @@ fun EmptyTimelineLightPreview() {
                 errorMessage = null,
                 onDraftChange = {},
                 onSend = PreviewNoOp,
-                onAttachment = PreviewNoOp,
+                onPhoto = PreviewNoOp,
+                onFile = PreviewNoOp,
             )
         }
     }

@@ -23,7 +23,7 @@ func TestInstanceInfoAdvertisesMultiBrowserCapability(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/instance/info", nil)
 	response := httptest.NewRecorder()
 	instanceInfo(capabilityInstanceService{}, fakeSetupService{initialized: true}, "https://example.test", logger)(response, request)
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"capabilities":["multi_browser_v1"]`) {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"multi_browser_v1"`) {
 		t.Fatalf("response = %d/%s", response.Code, response.Body.String())
 	}
 }

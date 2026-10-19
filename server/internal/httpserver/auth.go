@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"transdot.local/transfer-assistant/server/internal/deviceauth"
+	"transdot.local/transfer-assistant/server/internal/messages"
 )
 
 const (
@@ -48,6 +49,7 @@ func authenticateDevice(w http.ResponseWriter, r *http.Request, authService devi
 		if !handleAuthenticationError(w, err, logger) {
 			return deviceauth.Device{}, false
 		}
+		*r = *r.WithContext(messages.WithViewer(r.Context(), device.ID))
 		return device, true
 	}
 
@@ -60,6 +62,7 @@ func authenticateDevice(w http.ResponseWriter, r *http.Request, authService devi
 	if !handleBrowserAuthenticationError(w, err, logger) {
 		return deviceauth.Device{}, false
 	}
+	*r = *r.WithContext(messages.WithViewer(r.Context(), device.ID))
 	return device, true
 }
 
@@ -81,6 +84,7 @@ func authenticateMaster(w http.ResponseWriter, r *http.Request, authService devi
 	if !handleAuthenticationError(w, err, logger) {
 		return deviceauth.Device{}, false
 	}
+	*r = *r.WithContext(messages.WithViewer(r.Context(), device.ID))
 	return device, true
 }
 

@@ -87,6 +87,14 @@ func deleteMessage(
 			return
 		}
 		messageID := strings.TrimSpace(r.PathValue("id"))
+		var sequence int64
+		if access, ok := service.(*messages.Service); ok {
+			if _, err := access.Get(r.Context(), messageID); err != nil {
+				writeMessageError(w, err, logger)
+				return
+			}
+			sequence = access.Sequence(r.Context(), messageID)
+		}
 		if fileService != nil {
 			if err := fileService.DeleteMessage(r.Context(), messageID); err != nil {
 				writeFileError(w, err, logger)
@@ -98,7 +106,7 @@ func deleteMessage(
 				return
 			}
 		}
-		publisher.Publish("message.deleted", map[string]string{"message_id": messageID})
+		publisher.Publish("message.deleted", map[string]any{"message_id": messageID, "sequence": sequence})
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -133,6 +141,10 @@ func messageContext(authService deviceAuthenticator, service messageService, log
 
 func writeMessageError(w http.ResponseWriter, err error, logger *slog.Logger) {
 	switch {
+	case errors.Is(err, messages.ErrConflict):
+		writeError(w, http.StatusConflict, "MESSAGE_CONFLICT", "消息已被另一端修改，请重新载入后编辑。")
+	case errors.Is(err, messages.ErrNotText):
+		writeError(w, http.StatusBadRequest, "MESSAGE_NOT_TEXT", "只能编辑文本消息。")
 	case errors.Is(err, messages.ErrEmptyText):
 		writeError(w, http.StatusBadRequest, "TEXT_EMPTY", "Text message cannot be empty.")
 	case errors.Is(err, messages.ErrTextTooLarge):

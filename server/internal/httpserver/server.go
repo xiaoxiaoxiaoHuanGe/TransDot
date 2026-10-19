@@ -18,6 +18,7 @@ import (
 	"transdot.local/transfer-assistant/server/internal/deviceauth"
 	"transdot.local/transfer-assistant/server/internal/devices"
 	"transdot.local/transfer-assistant/server/internal/lantransfer"
+	"transdot.local/transfer-assistant/server/internal/messages"
 	"transdot.local/transfer-assistant/server/internal/pairing"
 	"transdot.local/transfer-assistant/server/internal/realtime"
 	"transdot.local/transfer-assistant/server/internal/setup"
@@ -179,6 +180,13 @@ func newHandlerComplete(
 	mux.HandleFunc("GET /api/v1/pairing/sessions/{id}/status", pairingStatus(pairingService, logger))
 	mux.HandleFunc("POST /api/v1/pairing/approve", approvePairing(authService, pairingService, pairingActionLimiter, logger))
 	mux.HandleFunc("POST /api/v1/pairing/reject", rejectPairing(authService, pairingService, pairingActionLimiter, logger))
+	if enhanced, ok := messageService.(*messages.Service); ok {
+		mux.HandleFunc("PATCH /api/v1/messages/{id}", editTextMessage(authService, enhanced, hub, logger))
+		mux.HandleFunc("GET /api/v1/history", historyAccess(authService, enhanced, hub, logger))
+		mux.HandleFunc("POST /api/v1/history/request", historyAccess(authService, enhanced, hub, logger))
+		mux.HandleFunc("GET /api/v1/history/browsers", historyDecisions(authService, enhanced, hub, logger))
+		mux.HandleFunc("PATCH /api/v1/history/browsers/{id}", historyDecisions(authService, enhanced, hub, logger))
+	}
 	mux.HandleFunc("GET /api/v1/messages", listMessages(authService, messageService, logger))
 	mux.HandleFunc("POST /api/v1/messages/text", createTextMessage(authService, messageService, hub, logger))
 	mux.HandleFunc("DELETE /api/v1/messages/{id}", deleteMessage(authService, messageService, fileService, hub, logger))
@@ -188,11 +196,11 @@ func newHandlerComplete(
 		mux.HandleFunc("POST /api/v1/upload-batches", createUploadBatch(authService, fileService, logger))
 		mux.HandleFunc("PUT /api/v1/uploads/{id}", uploadFile(authService, fileService, hub, logger))
 		mux.HandleFunc("PUT /api/v1/uploads/{id}/thumbnail", uploadThumbnail(authService, fileService, logger))
-		mux.HandleFunc("GET /api/v1/files/{id}/download", downloadFile(authService, fileService, logger))
-		mux.HandleFunc("GET /api/v1/files/{id}/thumbnail", serveThumbnail(authService, fileService, logger))
+		mux.HandleFunc("GET /api/v1/files/{id}/download", guardFileAccess(authService, messageService, downloadFile(authService, fileService, logger), logger))
+		mux.HandleFunc("GET /api/v1/files/{id}/thumbnail", guardFileAccess(authService, messageService, serveThumbnail(authService, fileService, logger), logger))
 	}
 	mux.HandleFunc("/api/", apiNotFound)
-	mux.HandleFunc("GET /ws", websocketEndpoint(authService, hub, lanBroker, logger))
+	mux.HandleFunc("GET /ws", websocketEndpoint(authService, hub, lanBroker, logger, messageService))
 	mux.Handle("/", webHandler)
 
 	return recoverRequests(logger, logRequests(logger, mux))

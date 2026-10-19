@@ -22,10 +22,10 @@ func TestInspectAndVerifyValidDataWithoutMutatingIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Inspect() error = %v", err)
 	}
-	if inspection.SchemaVersion != 11 || inspection.InstanceID != "instance-test" || inspection.InstanceFingerprint != "A1B2-C3D4" {
+	if inspection.SchemaVersion != 12 || inspection.InstanceID != "instance-test" || inspection.InstanceFingerprint != "A1B2-C3D4" {
 		t.Fatalf("inspection = %+v", inspection)
 	}
-	report, err := Verify(context.Background(), dataDir, 11)
+	report, err := Verify(context.Background(), dataDir, 12)
 	if err != nil {
 		t.Fatalf("Verify() error = %v", err)
 	}
@@ -51,7 +51,7 @@ func TestVerifyRejectsNewerSchema(t *testing.T) {
 
 func TestVerifyMissingDatabaseDoesNotCreateAnything(t *testing.T) {
 	dataDir := t.TempDir()
-	_, err := Verify(context.Background(), dataDir, 11)
+	_, err := Verify(context.Background(), dataDir, 12)
 	if err == nil || !strings.Contains(err.Error(), "transfer.db") {
 		t.Fatalf("Verify() error = %v", err)
 	}
@@ -69,7 +69,7 @@ func TestVerifyRejectsSymbolicLinks(t *testing.T) {
 	if err := os.Symlink(target, filepath.Join(dataDir, "files", "link")); err != nil {
 		t.Skipf("symbolic links unavailable: %v", err)
 	}
-	if _, err := Verify(context.Background(), dataDir, 11); err == nil || !strings.Contains(err.Error(), "symbolic link") {
+	if _, err := Verify(context.Background(), dataDir, 12); err == nil || !strings.Contains(err.Error(), "symbolic link") {
 		t.Fatalf("Verify() error = %v", err)
 	}
 }
@@ -93,7 +93,7 @@ func TestVerifyChecksFilesAndOnlyWarnsForMissingThumbnail(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dataDir, "files", "blob-1"), []byte("data"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	report, err := Verify(context.Background(), dataDir, 11)
+	report, err := Verify(context.Background(), dataDir, 12)
 	if err != nil {
 		t.Fatalf("missing thumbnail must only warn: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestVerifyChecksFilesAndOnlyWarnsForMissingThumbnail(t *testing.T) {
 	if err := os.Remove(filepath.Join(dataDir, "files", "blob-1")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Verify(context.Background(), dataDir, 11); err == nil || !strings.Contains(err.Error(), "blob-1") {
+	if _, err := Verify(context.Background(), dataDir, 12); err == nil || !strings.Contains(err.Error(), "blob-1") {
 		t.Fatalf("missing original error = %v", err)
 	}
 }

@@ -1,5 +1,11 @@
 # Android
 
+## 在线更新与发布
+
+1.3.0 起支持在设置中检查 APP 更新，并在 APP 内下载和调用系统安装界面。未配对时也能从连接页底部检查更新；首次安装来源授权及系统安装确认仍需要用户操作。
+
+正式 Release 需同时上传已签名 APK、SHA-256 文件和 `update.json`。使用 `scripts/create-update-manifest.mjs` 从已签名 APK 生成清单，具体命令与升级规则见 [v1.3.0 发布说明](../docs/releases/v1.3.0.md)。必须沿用既有签名，且递增 versionCode。
+
 Kotlin、Jetpack Compose、Material 3 单 Activity 应用，使用 `compileSdk = 36`、`targetSdk = 36`。
 
 ## 本地配置

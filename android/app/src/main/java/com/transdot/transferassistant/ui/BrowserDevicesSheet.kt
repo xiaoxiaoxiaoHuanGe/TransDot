@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -68,6 +69,7 @@ internal fun BrowserDevicesSheetContent(
     var renameTarget by remember { mutableStateOf<BrowserDevice?>(null) }
     var renameValue by remember { mutableStateOf("") }
     var revokeTarget by remember { mutableStateOf<BrowserDevice?>(null) }
+    var historyTab by remember { mutableStateOf(false) }
 
     Column(
         Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = AppSpacing.extraLarge),
@@ -90,7 +92,12 @@ internal fun BrowserDevicesSheetContent(
             AppStatusPanel(StatusTone.Error, "设备操作失败", it)
             TextButton(onClick = onClearError) { Text("关闭提示") }
         }
-        when {
+        Row {
+            TextButton(onClick = { historyTab = false }) { Text(if (!historyTab) "✓ 设备管理" else "设备管理") }
+            TextButton(onClick = { historyTab = true }) { Text(if (historyTab) "✓ 历史权限" else "历史权限") }
+        }
+        if (historyTab) Column(Modifier.weight(1f, fill = false).verticalScroll(androidx.compose.foundation.rememberScrollState())) { HistoryAccessSection() }
+        else when {
             state.loading -> Column(
                 Modifier.fillMaxWidth().padding(vertical = 48.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,

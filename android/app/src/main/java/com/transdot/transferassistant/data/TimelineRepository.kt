@@ -55,6 +55,8 @@ data class TimelineMessage(
     val metadataExpiresAt: String?,
     val file: FileAttachment? = null,
     val sourceDeviceName: String? = null,
+    val revision: Int = 0,
+    val editedAt: String? = null,
 )
 
 data class MessagePage(val messages: List<TimelineMessage>, val nextBefore: String?)
@@ -72,6 +74,8 @@ data class UploadProgress(
 
 sealed interface TimelineEvent {
     data class Created(val message: TimelineMessage) : TimelineEvent
+    data class Updated(val message: TimelineMessage) : TimelineEvent
+    data object HistoryChanged : TimelineEvent
     data class Deleted(val messageId: String) : TimelineEvent
     data class FileExpired(val fileId: String, val messageId: String) : TimelineEvent
     data object DeviceReplaced : TimelineEvent
@@ -80,6 +84,7 @@ sealed interface TimelineEvent {
 }
 
 sealed class TimelineFailure(message: String, cause: Throwable? = null) : Exception(message, cause) {
+    class Conflict : TimelineFailure("这条消息已被另一端修改，已重新同步；请取消编辑后重新打开。")
     class Unauthorized : TimelineFailure("Android Master 凭据已失效。")
     class Invalid(message: String) : TimelineFailure(message)
     class NotFound : TimelineFailure("消息或文件已不存在。")
@@ -98,6 +103,7 @@ interface TimelineRealtimeListener {
 interface TimelineRepository {
     suspend fun list(session: StoredSession, before: String? = null): MessagePage
     suspend fun sendText(session: StoredSession, text: String): TimelineMessage
+    suspend fun edit(session: StoredSession, message: TimelineMessage, text: String): TimelineMessage = throw TimelineFailure.Invalid("当前服务器不支持文本编辑，请更新服务器。")
     suspend fun delete(session: StoredSession, messageId: String)
     suspend fun search(session: StoredSession, query: String): List<TimelineMessage>
     suspend fun context(session: StoredSession, messageId: String): MessageContext
@@ -128,6 +134,10 @@ class NetworkTimelineRepository(
     override suspend fun sendText(session: StoredSession, text: String): TimelineMessage = withContext(Dispatchers.IO) {
         val body = JSONObject().put("text", text).toString()
         parseMessage(parseObject(execute(session, "/api/v1/messages/text", "POST", body).body))
+    }
+
+    override suspend fun edit(session: StoredSession, message: TimelineMessage, text: String): TimelineMessage = withContext(Dispatchers.IO) {
+        parseMessage(parseObject(execute(session, "/api/v1/messages/${urlEncode(message.id)}", "PATCH", JSONObject().put("text", text).put("revision", message.revision).toString()).body))
     }
 
     override suspend fun delete(session: StoredSession, messageId: String) = withContext(Dispatchers.IO) {
@@ -283,6 +293,8 @@ class NetworkTimelineRepository(
         return when (val code = error?.optString("code")) {
             "UNAUTHORIZED", "DEVICE_REVOKED" -> TimelineFailure.Unauthorized()
             "MESSAGE_NOT_FOUND", "FILE_NOT_FOUND", "FILE_EXPIRED" -> TimelineFailure.NotFound()
+            "MESSAGE_CONFLICT" -> TimelineFailure.Conflict()
+            "NOT_FOUND" -> TimelineFailure.Invalid("当前服务器不支持此功能，请更新服务器。")
             "FILE_TOO_LARGE" -> TimelineFailure.Invalid("单个文件不能超过 300 MB。")
             "BATCH_TOO_LARGE" -> TimelineFailure.Invalid("单批文件不能超过 500 MB。")
             "TOO_MANY_FILES" -> TimelineFailure.Invalid("一次最多选择 20 个文件。")
@@ -308,13 +320,15 @@ class NetworkTimelineRepository(
             json.getString("id"), json.getString("type"), json.optNullableString("batch_id"),
             json.getString("source_device_id"), json.getString("source_device_type"), json.optNullableString("text_content"),
             json.getString("created_at"), json.optNullableString("metadata_expires_at"), file,
-            json.optNullableString("source_device_name"),
+            json.optNullableString("source_device_name"), json.optInt("revision", 0), json.optNullableString("edited_at"),
         )
     }
 
     private fun parseEvent(rawValue: String): TimelineEvent {
         val json = JSONObject(rawValue)
         return when (json.optString("type")) {
+            "message.updated" -> TimelineEvent.Updated(parseMessage(json.getJSONObject("data")))
+            "history.changed" -> TimelineEvent.HistoryChanged
             "message.created" -> TimelineEvent.Created(parseMessage(json.getJSONObject("data")))
             "message.deleted" -> TimelineEvent.Deleted(json.getJSONObject("data").getString("message_id"))
             "file.expired" -> TimelineEvent.FileExpired(json.getJSONObject("data").getString("file_id"), json.getJSONObject("data").getString("message_id"))

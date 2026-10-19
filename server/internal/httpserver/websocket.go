@@ -15,6 +15,7 @@ import (
 
 	"transdot.local/transfer-assistant/server/internal/deviceauth"
 	"transdot.local/transfer-assistant/server/internal/lantransfer"
+	"transdot.local/transfer-assistant/server/internal/messages"
 	"transdot.local/transfer-assistant/server/internal/realtime"
 )
 
@@ -25,6 +26,7 @@ func websocketEndpoint(
 	hub *realtime.Hub,
 	lanBroker *lantransfer.Broker,
 	logger *slog.Logger,
+	services ...messageService,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		device, ok := authenticateDevice(w, r, authService, logger)
@@ -55,6 +57,11 @@ func websocketEndpoint(
 		for {
 			select {
 			case event := <-subscription.Events():
+				if len(services) > 0 {
+					if access, ok := services[0].(*messages.Service); ok && !visibleEvent(r.Context(), access, device, event) {
+						continue
+					}
+				}
 				if err := writeWebsocketEvent(connection, event); err != nil {
 					return
 				}

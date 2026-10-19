@@ -98,6 +98,7 @@ internal fun MessageBubble(
                 ) {
                     Column(Modifier.padding(horizontal = AppSpacing.medium, vertical = AppSpacing.small)) {
                         Text(message.textContent.orEmpty(), style = MaterialTheme.typography.bodyLarge)
+                        if (message.editedAt != null) Text("已编辑", style = MaterialTheme.typography.labelSmall)
                         MessageActionButtons(
                             onCopy = onCopy,
                             onDelete = onDelete,
@@ -259,7 +260,7 @@ private fun MessageActionButtons(
 ) {
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
         AppIconButton(R.drawable.ic_copy, "复制", onCopy, tint = tint)
-        AppIconButton(R.drawable.ic_delete, "删除", onDelete, tint = tint)
+        AppIconButton(R.drawable.ic_more, "更多操作", onDelete, tint = tint)
     }
 }
 
@@ -312,7 +313,9 @@ internal fun MessageComposer(
     errorMessage: String?,
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
-    onAttachment: () -> Unit,
+    onPhoto: () -> Unit,
+    onFile: () -> Unit = {},
+    editing: Boolean = false,
 ) {
     val focusManager = LocalFocusManager.current
     val byteCount = draft.toByteArray().size
@@ -329,7 +332,7 @@ internal fun MessageComposer(
             Row(
                 Modifier.fillMaxWidth().padding(top = if (errorMessage != null) AppSpacing.small else 0.dp),
                 verticalAlignment = Alignment.Bottom,
-                horizontalArrangement = Arrangement.spacedBy(9.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 TextField(
                     value = draft,
@@ -356,37 +359,10 @@ internal fun MessageComposer(
                         errorIndicatorColor = Color.Transparent,
                     ),
                 )
-                AnimatedContent(
-                    targetState = draft.isNotBlank(),
-                    transitionSpec = { fadeIn() togetherWith fadeOut() },
-                    label = "composer-action",
-                ) { hasText ->
-                    if (hasText) {
-                        Button(
-                            onClick = onSend,
-                            enabled = !sending && byteCount <= MAX_TEXT_BYTES,
-                            modifier = Modifier.height(48.dp).widthIn(min = 68.dp),
-                            shape = RoundedCornerShape(13.dp),
-                        ) {
-                            if (sending) CircularProgressIndicator(Modifier.size(19.dp), strokeWidth = 2.dp) else Text("发送")
-                        }
-                    } else {
-                        Surface(
-                            onClick = onAttachment,
-                            modifier = Modifier.size(48.dp),
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                            contentColor = MaterialTheme.colorScheme.onSurface,
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_add),
-                                    contentDescription = "添加照片或文件",
-                                    modifier = Modifier.size(22.dp),
-                                )
-                            }
-                        }
-                    }
+                AppIconButton(iconRes = R.drawable.ic_photo, contentDescription = "选择图片", onClick = onPhoto)
+                AppIconButton(iconRes = R.drawable.ic_file, contentDescription = "选择文件", onClick = onFile)
+                if (draft.isNotBlank() || editing) Button(onClick = onSend, enabled = !sending && draft.isNotBlank() && byteCount <= MAX_TEXT_BYTES, modifier = Modifier.height(48.dp), shape = RoundedCornerShape(13.dp)) {
+                    if (sending) CircularProgressIndicator(Modifier.size(19.dp), strokeWidth = 2.dp) else Text(if (editing) "保存" else "发送")
                 }
             }
             if (byteCount > 90 * 1024) {
