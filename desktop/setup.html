@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>连接 TransDot</title>
+<style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:linear-gradient(125deg,#eef5ff,#fff 60%,#eaf2ff);font:15px "Segoe UI",sans-serif;color:#18335f;display:grid;place-items:center}.card{width:min(520px,calc(100% - 40px));border:1px solid #dce8fc;border-radius:22px;background:#fff;padding:38px;box-shadow:0 20px 60px #2855a61c}.logo{width:52px;height:52px;display:grid;place-items:center;border-radius:15px;color:white;background:linear-gradient(125deg,#3277ff,#1549b9);font-weight:800;font-size:22px}h1{font-size:25px;margin:22px 0 10px}p{line-height:1.8;color:#667998}label{display:block;margin-top:25px;font-weight:600}input{width:100%;padding:14px;border-radius:11px;border:1px solid #cbdaf3;font:inherit;margin-top:9px;outline-color:#4687ff}button{width:100%;border:0;border-radius:11px;padding:14px;margin-top:16px;background:#2167e8;color:white;font:inherit;font-weight:600;cursor:pointer}#error{color:#be243b;min-height:20px}small{color:#8291ab}
+</style>
+</head>
+<body><main class="card">
+<div class="logo">T.</div><h1>连接你的 TransDot</h1>
+<p>输入已部署的 TransDot 服务器地址。连接后使用现有 Android APP 扫码授权这台电脑。</p>
+<form id="form"><label for="url">服务器地址</label><input id="url" type="url" placeholder="https://transdot.example.com:9004" required autocomplete="url"><button type="submit">连接服务器</button></form>
+<p id="error" role="alert"></p><small>仅允许 HTTPS 服务器，localhost 调试除外。连接后最小化到系统托盘，继续自动接收。</small>
+</main>
+<script>
+const form=document.getElementById('form');
+const input=document.getElementById('url');
+const error=document.getElementById('error');
+window.transdotDesktop.setupInfo().then(v=>{input.value=v.serverUrl||''}).catch(()=>{});
+form.addEventListener('submit',async e=>{
+e.preventDefault();error.textContent='';
+try{await window.transdotDesktop.configure(input.value)}
+catch(ex){error.textContent=ex.message||'连接失败'}
+});
+</script>
+</body></html>
