@@ -189,7 +189,7 @@ fn open_remote(app: &AppHandle, origin: &str, visible: bool) -> Result<(), Strin
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--hidden".to_string()])))
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--hidden"])))
         .invoke_handler(tauri::generate_handler![
             get_settings, configure_server, copy_text, copy_image_png, clipboard_enabled
         ])
