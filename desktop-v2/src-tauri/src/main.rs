@@ -221,7 +221,7 @@ fn main() {
                         if let Ok(mut s) = shared.0.lock() {
                             s.copy_enabled = !s.copy_enabled;
                             let _ = save_settings(app, &s);
-                        }
+                        };
                     }
                     "auto" => {
                         let manager = app.autolaunch();
