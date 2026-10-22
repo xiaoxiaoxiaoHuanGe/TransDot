@@ -6,7 +6,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { normalizeServerUrl, isServerPage } = require('./security.cjs');
 
-const ICON_PNG = 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAq0lEQVR4nOVX2xGAIAyrnrvgZDqTTgbT6K8PoC2UUs/8UpqQkjsA+DsGSpFb/FHSPOwz2j9bUErMERJdkCKm1yFO9XwK0cRPQ8vQpDjsOaJw+xtXdgYlS5DdXTDCvIbuOOlBDTtnffQSoAMzC2v2kO1ArIgf7I2gN8RhyxyUeQ2599xGIx5BbbyeGlAekFK5ctu6AhgtPDlsOALR1Idbb5sdESohmsr6LE+80QQyxzSY+AAAAAElFTkSuQmCC';
+const ICON_PNG = 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAA00lEQVR42t2XMQ7CMAxF0y/3DowwcDIGOBK3YwSJIxCpTEiVSWjsOE6LxzTOc74dVx6Op+cUEvaiGCxtjJRcp9Zgfi4PBB7wXwx4wlMseMN5EAidDT1uP1ehuwKkcbpdd8n1w+UhT4EVfOlbzob9+T7VgmvU6P8KWtxe4oMWcIkv1cg3z7M2UFjAtU9wO0W4ygB4zrU1UNSItIeX1AWsDtpsJyz+F5SmQ6oWLKXVpEqswP/1gdzE4mFjpJV0wh4qfJhYGh5bwr+K0CMIzqDcBq/x/A3aXVSIs1er/AAAAABJRU5ErkJggg==';
 const MAX_PNG_BYTES = 12 * 1024 * 1024;
 const MAX_PIXELS = 32 * 1024 * 1024;
 const PNG_HEADER = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
