@@ -1,6 +1,6 @@
 # TransDot Windows 桌面版
 
-复用现有 Android APP、Go 服务端和 React 页面；不修改数据库或手机端传输协议。
+复用现有 Android APP、Go 服务端和 React 页面；不修改数据库、手机端传输协议，**也不需要升级已部署的服务器 Web 版本**。接收器运行在 Electron 独立 preload 中。
 
 Windows 端在后台保持 WebSocket，接收到新的文字时写入系统文本剪贴板，收到新图片时从授权的下载地址获取原图并写入图片剪贴板（而不是复制 URL）。可直接在支持相应类型的应用按 Ctrl+V 粘贴。
 
@@ -17,7 +17,7 @@ Windows 安装版和便携版：
 
     npm run dist
 
-生成在 desktop/dist。也可以从 GitHub Actions 的 Windows Desktop workflow 获取构建工件中的 .exe。**尚未配置代码签名**。
+生成在 desktop/dist，安装版名称为 `TransDot-Setup-1.0.1-x64.exe`，便携版为 `TransDot-Portable-1.0.1-x64.exe`。也可以从 GitHub Actions 的 Windows Desktop workflow 获取构建工件中的两个 .exe。**尚未配置代码签名**。
 
 ## 首次使用
 
@@ -33,5 +33,5 @@ Windows 安装版和便携版：
 - 不处理普通文件；图片不会自动另存到下载文件夹。
 - 支持普通文本和图片粘贴。图片原文件下载上限 12 MiB，最多 3200 万像素，图片太大时可能跳过。
 - 仅 HTTPS（允许 localhost HTTP 本地调试），并限制受信任的服务器主页面、阻止新窗口和跨站跳转。
-- Electron 启用沙箱、上下文隔离，网页无法直接访问 Node.js；只有受控桥接接口可写入剪贴板。
+- Electron 启用沙箱、上下文隔离，网页无法直接访问 Node.js；接收器在隔离 preload 中调用受控 IPC 写入剪贴板，服务器页面没有直接写剪贴板的桥接能力。
 - 由于自动剪贴板会覆盖当前剪贴板内容，共享电脑使用时建议通过托盘暂时关闭该功能。
