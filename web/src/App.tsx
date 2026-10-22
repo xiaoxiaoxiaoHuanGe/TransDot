@@ -1,3 +1,4 @@
+import { createDesktopClipboardReceiver } from './desktopClipboard'
 import { ThemeSwitch } from './ThemeSwitch'
 import { ChangeEvent, ClipboardEvent, DragEvent, FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
@@ -635,6 +636,7 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
   const isAtBottomRef = useRef(true)
   const knownMessageIDsRef = useRef<Set<string>>(new Set())
   const initialSyncCompleteRef = useRef(false)
+  const desktopClipboardRef = useRef<ReturnType<typeof createDesktopClipboardReceiver> | null>(null)
   const scrollRequestIDRef = useRef(0)
   const uploadedFileFingerprintCountsRef = useRef<Map<string, number>>(new Map())
   const batchDownloadAbortRef = useRef<AbortController | null>(null)
@@ -707,6 +709,12 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
     return false
   }, [onSessionInvalid])
 
+  useEffect(() => {
+    const receiver = createDesktopClipboardReceiver(window.transdotDesktop, authSession.device_id)
+    desktopClipboardRef.current = receiver
+    return () => { receiver.dispose(); desktopClipboardRef.current = null }
+  }, [authSession.device_id])
+
   const acceptCreatedMessage = useCallback((createdMessage: TimelineMessage) => {
     if (knownMessageIDsRef.current.has(createdMessage.id)) return
     knownMessageIDsRef.current.add(createdMessage.id)
@@ -720,6 +728,7 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
 
   const applyRealtimeEvent = useCallback((event: RealtimeEnvelope) => {
     if (event.type === 'message.created' && isTimelineMessage(event.data)) {
+      desktopClipboardRef.current?.receive(event.data)
       acceptCreatedMessage(event.data)
     } else if (event.type === 'message.updated' && isTimelineMessage(event.data)) {
       const changed = event.data
