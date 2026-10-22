@@ -1,0 +1,61 @@
+name: TransDot Windows Tauri v2
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/tauri2-lightweight-desktop
+    paths:
+      - "desktop-v2/**"
+      - ".github/workflows/windows-tauri-v2.yml"
+  pull_request:
+    paths:
+      - "desktop-v2/**"
+      - ".github/workflows/windows-tauri-v2.yml"
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "desktop-v2/src-tauri -> target"
+      - name: Install icon builder and Tauri CLI
+        working-directory: desktop-v2
+        run: npm install --no-audit --no-fund
+      - name: Generate exclusive Windows branding
+        working-directory: desktop-v2
+        run: npm run icons
+      - name: Static smoke tests
+        working-directory: desktop-v2
+        run: npm test
+      - name: Rust validation
+        working-directory: desktop-v2/src-tauri
+        run: cargo test
+      - name: Package Tauri Windows installer
+        working-directory: desktop-v2
+        run: npm run build
+      - name: Report actual installer size
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem 'desktop-v2/src-tauri/target/release/bundle/nsis' -Filter '*.exe')
+          if ($files.Count -eq 0) { throw "No NSIS EXE found" }
+          foreach ($file in $files) {
+            $size = [math]::Round($file.Length / 1MB, 2)
+            Write-Host "$($file.Name): $size MiB"
+            if ($file.Length -gt 15MB) {
+              Write-Warning "Installer exceeds the 15 MiB target; size tuning is needed."
+            }
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "| $($file.Name) | $size MiB |"
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TransDot-Tauri-Windows-v2
+          path: desktop-v2/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error

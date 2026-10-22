@@ -1,0 +1,111 @@
+/* Runs in the top-level remote TransDot document, not in the local settings page.
+   The host only permits server origin navigation. Rust commands independently
+   verify the same configured origin before touching the OS clipboard. */
+(() => {
+  if (window.top !== window ||
+      window.location.origin !== window.__TRANSDOT_TRUSTED_ORIGIN__) return;
+  if (window.__transdotDesktopReceiver) return;
+  window.__transdotDesktopReceiver = true;
+  let socket = null;
+  let closed = false;
+  let timer = null;
+  let ownDeviceId = "";
+  let counter = 0;
+  const seen = new Set();
+  const invoke = (name, args) => {
+    const fn = window.__TAURI_INTERNALS__?.invoke;
+    if (typeof fn !== "function") throw new Error("Tauri IPC unavailable");
+    return fn(name, args);
+  };
+  function retry() {
+    if (closed || timer) return;
+    timer = setTimeout(() => { timer = null; connect(); }, 2300);
+  }
+  function safeImagePath(value) {
+    try {
+      const url = new URL(value, location.origin);
+      if (url.origin !== location.origin || url.search || url.hash ||
+          !/^\/api\/v1\/files\/[^/]+\/download$/.test(url.pathname)) return null;
+      return url.pathname;
+    } catch { return null; }
+  }
+  async function imageAsPngBase64(blob) {
+    const objectUrl = URL.createObjectURL(blob);
+    try {
+      const img = new Image();
+      await new Promise((yes, no) => {
+        img.onload = yes; img.onerror = no;
+        img.src = objectUrl;
+      });
+      if (!img.naturalWidth || !img.naturalHeight ||
+          img.naturalWidth * img.naturalHeight > 12_000_000) return null;
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+      canvas.getContext("2d").drawImage(img, 0, 0);
+      const result = canvas.toDataURL("image/png").split(",", 2)[1];
+      return result.length <= 16*1024*1024 ? result : null;
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  }
+  async function onCreated(message) {
+    if (!message || typeof message.id !== "string" || !["text", "image"].includes(message.type) ||
+        message.source_device_id === ownDeviceId || seen.has(message.id)) return;
+    if (seen.size > 1024) seen.clear();
+    seen.add(message.id);
+    const requestId = ++counter;
+    try {
+      if (!await invoke("clipboard_enabled")) return;
+      if (message.type === "text" && typeof message.text_content === "string") {
+        if (requestId === counter) await invoke("copy_text", {text: message.text_content});
+      } else if (message.type === "image" &&
+                 message.file?.status === "available" &&
+                 message.file?.size_bytes <= 12*1024*1024) {
+        const path = safeImagePath(message.file.download_url);
+        if (!path) return;
+        const response = await fetch(path, {credentials:"same-origin",cache:"no-store"});
+        if (!response.ok) return;
+        const blob = await response.blob();
+        if (blob.size > 12*1024*1024 || !blob.type.startsWith("image/")) return;
+        const data = await imageAsPngBase64(blob);
+        if (data && requestId === counter) await invoke("copy_image_png", {data});
+      }
+    } catch (error) {
+      console.warn("[TransDot v2] Clipboard sync error:",error);
+    }
+  }
+  async function connect() {
+    if (closed || socket || location.origin !== window.__TRANSDOT_TRUSTED_ORIGIN__) return;
+    try {
+      const result = await fetch("/api/v1/auth/session",
+        {credentials:"same-origin",cache:"no-store"});
+      if (!result.ok) {retry();return;}
+      const session = await result.json();
+      if (!session.authenticated || typeof session.device_id !== "string") {retry();return;}
+      ownDeviceId = session.device_id;
+      const url = new URL("/ws", location.href);
+      url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
+      socket = new WebSocket(url.toString());
+      socket.onmessage = event => {
+        try {
+          const packet = JSON.parse(event.data);
+          if (packet.type === "message.created") void onCreated(packet.data);
+          if (["device.revoked","device.replaced"].includes(packet.type)) socket?.close();
+        } catch (error) {console.warn("[TransDot v2] Bad WebSocket event",error);}
+      };
+      socket.onclose = () => {socket=null;retry();};
+      socket.onerror = () => {};
+    } catch (error) {
+      console.warn("[TransDot v2] Waiting for session:",error);
+      retry();
+    }
+  }
+  window.addEventListener("pagehide",()=> {
+    closed = true; counter++;
+    if (timer) clearTimeout(timer);
+    socket?.close(); socket=null;
+  },{once:true});
+  const start=()=>{connect();};
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded",start,{once:true});
+  else start();
+})();

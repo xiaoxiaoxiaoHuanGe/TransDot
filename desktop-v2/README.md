@@ -1,0 +1,54 @@
+# TransDot Desktop v2 — Windows 轻量版
+
+新建在独立分支的 Tauri 2 / WebView2 桌面客户端。它不替换现有 desktop/ Electron 版本。
+原 Android、Go 服务器、React 网页及配对 API 均不改动，服务器无需升级。
+
+## 功能
+
+- 使用已有服务器页面和 APP 配对机制，保留原时间线。
+- 新的 Android 文字消息自动写入 Windows 系统文本剪贴板。
+- 新的 Android 图片消息自动下载、解码成原尺寸 PNG，然后写入 Windows 图片剪贴板。
+- Windows 关闭窗口继续驻留系统托盘。托盘提供打开、暂停或启用自动复制、切换开机启动、更换服务器、退出。
+- 登录状态留在 Windows WebView2 的浏览器配置中，不复制主账号 Token 到本地配置文件。
+- 不复制历史消息，避免重连后覆盖剪贴板；被服务器撤销授权后停止接收。
+- 网络中断期间消息仍留存在时间线上，不保证离线消息补复制。
+- 设计蓝白独立应用图标（手机 ↔ 屏幕 + TransDot dot）。
+
+## 构建
+
+需 Windows 11 或装有 WebView2 的 Windows 10，Node.js 22、Rust stable >=1.90 和 Microsoft C++ Build Tools。
+
+在 desktop-v2 运行：
+
+    npm install
+    npm run icons
+    npm test
+    npm run build
+
+安装版输出路径为 src-tauri/target/release/bundle/nsis/。
+GitHub Actions 工作流 TransDot Windows Tauri v2 自动生成构建产物并展示 EXE 实测大小。
+
+## 安全边界
+
+- 远程服务器必须使用 HTTPS（本机 localhost / 127.0.0.1 允许 HTTP 调试）。
+- 配置文件仅保存服务器地址和剪贴板自动复制开关，保存在 Tauri 应用配置目录。
+- Rust 主进程仅允许标签为 remote 且 URL origin 与已配置服务器完全一致的窗口进行剪贴板写入。
+- 限制 WebView 页面导航到设置的服务器 origin。
+- 远程页面使用受限制的 Tauri 命令；为支持用户自定义服务器域名，当前 capability 对 HTTPS 域名采用广泛 URL 匹配，但所有敏感命令在 Rust 侧再次强校验实际窗口来源。发布前仍建议安全审计。
+- 原始图片下载最多 12 MiB，最大 1200 万像素，解码后的 PNG Base64 最多 16 MiB。
+- WebView2 runtime 通过系统提供；安装器默认在缺少运行环境时下载引导安装包，离线机器需要额外安装 WebView2。
+
+## 验收清单
+
+1. 新安装后填服务器地址；Android 扫码授权。
+2. APP 发送普通文字，在 Windows 记事本 Ctrl+V 确认。
+3. APP 发送 PNG/JPEG，在 Windows 画图 Ctrl+V 确认实际图片内容。
+4. 关闭主窗口之后复测两种剪贴板写入。
+5. 托盘“暂停/启用”切换后确认行为。
+6. 启用开机启动、注销/登录后验证后台接收。
+7. 在 GitHub Actions 日志内核验 Windows 安装包真实大小，与 Electron 的单文件 EXE 对比。
+
+### 已知风险
+
+桌面端要加载部署在服务端的 Web 页面，必须保证现有反向代理正常支持 WebSocket。
+Windows WebView2、真实剪贴板接入和实际运行需要 Windows 电脑做人工验收；CI 编译及单元测试通过并不等于所有运行场景通过。
