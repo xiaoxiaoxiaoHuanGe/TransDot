@@ -30,9 +30,10 @@ struct Shared(Mutex<Settings>);
 // No message contents, tokens or device identifiers are recorded.
 struct ReceiverStatus(Mutex<String>);
 fn record_status(app: &AppHandle, message: &str) {
-    if let Ok(mut status) = app.state::<ReceiverStatus>().0.lock() {
+    let state = app.state::<ReceiverStatus>();
+    if let Ok(mut status) = state.0.lock() {
         *status = message.chars().take(240).collect();
-    }
+    };
 }
 
 fn settings_file(app: &AppHandle) -> Result<PathBuf, String> {
