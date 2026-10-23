@@ -8,6 +8,8 @@ const script = fs.readFileSync(new URL('../src-tauri/src/inject.js', import.meta
 async function createMockReceiver() {
   const calls = []
   const sockets = []
+  let latestMessages = []
+  let pollCallback = null
   const location = {
     origin: 'https://transdot.example.com:9004',
     href: 'https://transdot.example.com:9004/',
@@ -32,16 +34,21 @@ async function createMockReceiver() {
   const environment = {
     window: page, location, document, WebSocket: FakeWebSocket,
     URL, setTimeout, clearTimeout, console,
+    setInterval(callback) { pollCallback = callback; return 1 },
+    clearInterval() {},
     fetch: async path => {
-      assert.equal(path, '/api/v1/auth/session')
-      return {ok:true,json:async()=>({authenticated:true,device_id:'own-desktop'})}
+      if (path === '/api/v1/auth/session') {
+        return {ok:true,json:async()=>({authenticated:true,device_id:'own-desktop'})}
+      }
+      assert.equal(path, '/api/v1/messages?limit=50')
+      return {ok:true,json:async()=>({messages:latestMessages})}
     },
   }
   vm.runInNewContext(script, environment)
   for(let n=0;n<5;n++) await new Promise(resolve=>setImmediate(resolve))
   assert.equal(sockets.length,1,'paired session starts realtime listener')
   assert.match(sockets[0].url, /^wss:\/\//)
-  return {calls,sockets}
+  return {calls,sockets, setLatestMessages: items=>{ latestMessages = items }, poll:()=>pollCallback?.()}
 }
 
 test('Android text message really invokes the native clipboard command',async()=>{
@@ -66,4 +73,30 @@ test('self-sent messages and duplicate realtime events never overwrite the clipb
   send(other)
   for(let n=0;n<8;n++) await new Promise(resolve=>setImmediate(resolve))
   assert.equal(calls.filter(call=>call.name==='copy_text').length,1)
+})
+
+test('REST fallback copies a newly arrived Android message when WebSocket misses it',async()=>{
+  const {calls, setLatestMessages, poll} = await createMockReceiver()
+  setLatestMessages([{
+    id:'poll-new',type:'text',source_device_id:'phone-1',
+    text_content:'REST fallback copied me',created_at:'2026-10-23T10:00:00Z',
+  }])
+  await poll()
+  for(let n=0;n<8;n++) await new Promise(resolve=>setImmediate(resolve))
+  assert.equal(calls.filter(x=>x.name==='copy_text').length,1)
+  assert.equal(calls.find(x=>x.name==='copy_text').args.text,'REST fallback copied me')
+})
+test('initial REST baseline never copies historical messages',async()=>{
+  const {calls, setLatestMessages, poll} = await createMockReceiver()
+  await poll()
+  assert.equal(calls.filter(x=>x.name==='copy_text').length,0)
+})
+test('the same message arriving via WebSocket and REST copies only once',async()=>{
+  const {calls,sockets,setLatestMessages,poll} = await createMockReceiver()
+  const msg={id:'dup-id',type:'text',source_device_id:'phone-1',text_content:'once',created_at:'2026-10-23T10:00:00Z'}
+  sockets[0].onmessage({data:JSON.stringify({type:'message.created',data:msg})})
+  setLatestMessages([msg])
+  await poll()
+  for(let n=0;n<8;n++) await new Promise(resolve=>setImmediate(resolve))
+  assert.equal(calls.filter(x=>x.name==='copy_text').length,1)
 })
