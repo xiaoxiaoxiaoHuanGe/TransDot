@@ -66,3 +66,27 @@ test('remote clipboard end-to-end self-test is wired in both Rust and injected J
  assert.match(js,/window\.__transdotDesktopTest\s*=/)
  assert.match(js,/桌面消息接收链路测试成功/)
 })
+
+
+test('remote WebView custom clipboard commands have real Tauri ACL grants',()=>{
+ const build=read('src-tauri/build.rs')
+ const remote=JSON.parse(read('src-tauri/capabilities/remote.json'))
+ const local=JSON.parse(read('src-tauri/capabilities/settings.json'))
+ const remoteCommands=['copy_text','copy_image_png','clipboard_enabled','receiver_diagnostic']
+ const localCommands=['get_settings','configure_server']
+ assert.match(build,/AppManifest::new\(\)\.commands/)
+ for(const command of [...remoteCommands,...localCommands]) {
+   assert.ok(build.includes('"'+command+'"'), 'manifest must register '+command)
+ }
+ const kebab=command=>'allow-'+command.replaceAll('_','-')
+ for(const command of remoteCommands) {
+   assert.ok(remote.permissions.includes(kebab(command)),command+' must be allowed remotely')
+   assert.ok(!local.permissions.includes(kebab(command)),command+' must not be allowed from settings')
+ }
+ for(const command of localCommands) {
+   assert.ok(local.permissions.includes(kebab(command)),command+' must be allowed from local settings')
+   assert.ok(!remote.permissions.includes(kebab(command)),command+' must not be allowed remotely')
+ }
+ assert.deepEqual(remote.windows,['remote'])
+ assert.deepEqual(local.windows,['settings'])
+})
