@@ -462,7 +462,7 @@ mod tests {
 
     #[test]
     fn shortcut_normalization_requires_a_modifier_and_supported_key() {
-        assert_eq!(normalize_shortcut("ctrl+shift+t").unwrap(), "Ctrl+Alt+T");
+        assert_eq!(normalize_shortcut("ctrl+shift+t").unwrap(), "Ctrl+Shift+T");
         assert_eq!(normalize_shortcut("Alt+F8").unwrap(), "Alt+F8");
         assert_eq!(normalize_shortcut("Win+1").unwrap(), "Super+1");
         assert!(normalize_shortcut("T").is_err());
