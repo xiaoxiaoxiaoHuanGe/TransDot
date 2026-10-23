@@ -8,6 +8,7 @@
   "permissions": [
     "core:default",
     "allow-get-settings",
-    "allow-configure-server"
+    "allow-configure-server",
+    "allow-configure-shortcut"
   ]
 }
