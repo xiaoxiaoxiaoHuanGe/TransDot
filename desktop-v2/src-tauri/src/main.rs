@@ -245,9 +245,10 @@ fn main() {
             let auto = MenuItem::with_id(app, "auto", "切换开机启动", true, None::<&str>)?;
             let setup = MenuItem::with_id(app, "setup", "更换服务器", true, None::<&str>)?;
             let test = MenuItem::with_id(app, "test", "测试写入 Windows 剪贴板", true, None::<&str>)?;
+            let remote_test = MenuItem::with_id(app, "remote_test", "测试消息接收链路", true, None::<&str>)?;
             let diagnostics = MenuItem::with_id(app, "diagnostics", "复制接收器诊断信息", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "完全退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open,&state_item,&toggle,&auto,&setup,&test,&diagnostics,&quit])?;
+            let menu = Menu::with_items(app, &[&open,&state_item,&toggle,&auto,&setup,&test,&remote_test,&diagnostics,&quit])?;
             // Keep menu labels synchronized with the saved state, even after reboot.
             let toggle_label = toggle.clone();
             let status_label = state_item.clone();
@@ -310,6 +311,23 @@ fn main() {
                             record_status(app, &format!("本机剪贴板写入失败: {err}"));
                         } else {
                             record_status(app, "本机测试已写入，请打开记事本按 Ctrl+V");
+                        }
+                    }
+                    "remote_test" => {
+                        if let Some(window) = app.get_webview_window("remote") {
+                            let expected = app.state::<Shared>().0.lock()
+                                .map(|s| s.server_url.clone()).unwrap_or_default();
+                            let valid = window.url().map(|u|
+                                origin_matches(u.as_str(), &expected)
+                            ).unwrap_or(false);
+                            if valid {
+                                record_status(app, "已发送桌面接收链路测试，等待网页侧反馈");
+                                let _ = window.eval("window.__transdotDesktopTest?.()");
+                            } else {
+                                record_status(app, "测试失败：当前网页服务器来源不匹配");
+                            }
+                        } else {
+                            record_status(app, "测试失败：消息网页窗口尚未创建");
                         }
                     }
                     "diagnostics" => {
