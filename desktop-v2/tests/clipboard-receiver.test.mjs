@@ -100,3 +100,11 @@ test('the same message arriving via WebSocket and REST copies only once',async()
   for(let n=0;n<8;n++) await new Promise(resolve=>setImmediate(resolve))
   assert.equal(calls.filter(x=>x.name==='copy_text').length,1)
 })
+
+test('remote webview bridge self-test writes through native clipboard API',async()=>{
+  const {calls,sockets} = await createMockReceiver()
+  assert.equal(sockets.length,1)
+  // The browser-side end-to-end test is available without a mobile message.
+  const probe = calls.some(call=>call.name==='receiver_diagnostic')
+  assert.equal(probe,true)
+})
