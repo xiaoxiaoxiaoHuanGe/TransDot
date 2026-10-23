@@ -191,6 +191,7 @@ fn open_remote(app: &AppHandle, origin: &str, visible: bool) -> Result<(), Strin
     }
     let url = url::Url::parse(origin).map_err(|e| e.to_string())?;
     let allowed_origin = origin.to_string();
+    let navigation_origin = allowed_origin.clone();
     let script = format!(
         "window.__TRANSDOT_TRUSTED_ORIGIN__ = {};\n{}",
         serde_json::to_string(origin).map_err(|e| e.to_string())?,
@@ -215,7 +216,7 @@ fn open_remote(app: &AppHandle, origin: &str, visible: bool) -> Result<(), Strin
             record_status(&window.app_handle(), "服务端网页已加载，正在启动实时接收器");
             let _ = window.eval(&script);
         })
-        .on_navigation(move |url| url.origin().ascii_serialization() == origin.to_string())
+        .on_navigation(move |url| url.origin().ascii_serialization() == navigation_origin)
         .build()
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -303,7 +304,7 @@ fn main() {
                     }
                     "test" => {
                         let result = app.clipboard().write_text(
-                            "TransDot v2.0.1：Windows 系统剪贴板写入测试成功。"
+                            "TransDot v2.0.2：Windows 系统剪贴板写入测试成功。"
                         );
                         if let Err(err) = result {
                             record_status(app, &format!("本机剪贴板写入失败: {err}"));
@@ -315,7 +316,7 @@ fn main() {
                         let msg = app.state::<ReceiverStatus>().0.lock()
                             .map(|s| s.clone()).unwrap_or_else(|_| "状态不可读取".into());
                         let _ = app.clipboard().write_text(
-                            format!("TransDot Desktop v2.0.1 接收器诊断\n{msg}")
+                            format!("TransDot Desktop v2.0.2 接收器诊断\n{msg}")
                         );
                     }
                     "quit" => app.exit(0),
