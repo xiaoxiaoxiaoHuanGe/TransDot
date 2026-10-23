@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "settings",
+  "description": "Local trusted configuration window",
+  "windows": [
+    "settings"
+  ],
+  "permissions": [
+    "core:default",
+    "allow-get-settings",
+    "allow-configure-server"
+  ]
+}

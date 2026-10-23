@@ -1,0 +1,26 @@
+[package]
+name = "transdot_desktop"
+version = "2.0.3"
+description = "TransDot Windows desktop receiver"
+edition = "2021"
+rust-version = "1.90"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-autostart = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = "thin"
+strip = true
+opt-level = "z"

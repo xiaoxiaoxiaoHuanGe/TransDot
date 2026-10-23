@@ -1,0 +1,42 @@
+{
+  "name": "transdot-desktop",
+  "version": "1.0.1",
+  "private": true,
+  "description": "TransDot Windows desktop receiver and clipboard sync",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test *.test.cjs",
+    "dist": "electron-builder --win nsis portable"
+  },
+  "devDependencies": {
+    "electron": "^39.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "com.transdot.desktop",
+    "productName": "TransDot",
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "security.cjs",
+      "setup.html",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "TransDot-Setup-${version}-${arch}.${ext}"
+    },
+    "portable": {
+      "artifactName": "TransDot-Portable-${version}-${arch}.${ext}"
+    }
+  }
+}

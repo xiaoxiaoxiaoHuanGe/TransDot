@@ -1,0 +1,41 @@
+name: Windows Desktop
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/windows-desktop-clipboard]
+    paths: ['desktop/**', 'web/src/desktopClipboard.ts', 'web/src/App.tsx', '.github/workflows/windows-desktop.yml']
+  pull_request:
+    paths: ['desktop/**', 'web/src/desktopClipboard.ts', 'web/src/App.tsx', '.github/workflows/windows-desktop.yml']
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm install --no-audit --no-fund
+      - name: Test desktop
+        working-directory: desktop
+        run: npm test
+      - name: Package Windows EXE
+        working-directory: desktop
+        run: npm run dist
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+      - name: Test web
+        working-directory: web
+        run: npm test
+      - name: Build web
+        working-directory: web
+        run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TransDot-Windows
+          path: desktop/dist/*.exe
+          if-no-files-found: error
