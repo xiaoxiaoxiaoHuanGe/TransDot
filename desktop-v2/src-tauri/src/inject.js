@@ -24,7 +24,7 @@
   // This validates remote page JS -> Tauri command -> Windows clipboard.
   window.__transdotDesktopTest = async () => {
     try {
-      await invoke('copy_text', {text:'TransDot v2.0.2：桌面消息接收链路测试成功'});
+      await invoke('copy_text', {text:'TransDot v2.0.3：桌面消息接收链路测试成功'});
       await updateStatus('桌面网页到 Windows 剪贴板的调用链路测试成功');
     } catch (error) {
       await updateStatus('桌面消息链路测试失败：' + String(error).slice(0,120));
