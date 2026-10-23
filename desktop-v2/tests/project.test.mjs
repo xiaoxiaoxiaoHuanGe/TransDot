@@ -40,6 +40,7 @@ test('tray menu stays focused on daily actions and shortcut settings',()=>{
  assert.match(rust,/快捷键设置/)
  assert.match(rust,/打开面板/)
  assert.match(rust,/完全退出/)
+ assert.match(rust,/PredefinedMenuItem::separator/)
  assert.doesNotMatch(rust,/MenuItem::with_id\(app, "diagnostics"/)
  assert.doesNotMatch(rust,/MenuItem::with_id\(app, "test"/)
  assert.doesNotMatch(rust,/MenuItem::with_id\(app, "remote_test"/)

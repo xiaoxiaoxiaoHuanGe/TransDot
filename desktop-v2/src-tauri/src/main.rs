@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{
     image::Image,
-    menu::{CheckMenuItem, Menu, MenuItem},
+    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
     AppHandle, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
@@ -365,7 +365,12 @@ fn main() {
             let setup = MenuItem::with_id(app, "setup", "更换服务器", true, None::<&str>)?;
             let shortcut_settings = MenuItem::with_id(app, "shortcut_settings", "快捷键设置…", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "完全退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open, &toggle, &auto, &setup, &shortcut_settings, &quit])?;
+            let daily_separator = PredefinedMenuItem::separator(app)?;
+            let exit_separator = PredefinedMenuItem::separator(app)?;
+            let menu = Menu::with_items(
+                app,
+                &[&open, &toggle, &auto, &daily_separator, &setup, &shortcut_settings, &exit_separator, &quit],
+            )?;
             let toggle_menu = toggle.clone();
             let auto_menu = auto.clone();
             TrayIconBuilder::new()
