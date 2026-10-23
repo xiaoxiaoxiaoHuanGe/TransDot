@@ -7,6 +7,7 @@ fn main() {
             tauri_build::AppManifest::new().commands(&[
                 "get_settings",
                 "configure_server",
+                "configure_shortcut",
                 "copy_text",
                 "copy_image_png",
                 "clipboard_enabled",

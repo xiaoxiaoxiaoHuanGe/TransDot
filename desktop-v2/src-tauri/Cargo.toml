@@ -1,6 +1,6 @@
 [package]
 name = "transdot_desktop"
-version = "2.0.3"
+version = "2.0.4"
 description = "TransDot Windows desktop receiver"
 edition = "2021"
 rust-version = "1.90"
@@ -12,6 +12,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-autostart = "2"
+tauri-plugin-global-shortcut = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 url = "2"

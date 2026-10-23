@@ -1,21 +1,147 @@
-<!doctype html><html lang="zh-CN"><head>
+<!doctype html>
+<html lang="zh-CN">
+<head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:">
-<title>TransDot · 轻量桌面版</title>
+<title>TransDot · 设置</title>
 <style>
-*{box-sizing:border-box}body{font:15px "Segoe UI","Microsoft YaHei",sans-serif;color:#203967;background:linear-gradient(132deg,#e9f3ff,#fff 60%,#e5f1ff);margin:0;min-height:100vh;display:grid;place-items:center}main{width:min(480px,calc(100vw - 30px));background:#fff;border:1px solid #dce7fa;border-radius:22px;box-shadow:0 18px 70px #1553a51e;padding:34px}.mark{background:linear-gradient(135deg,#1fc4ff,#1046da);color:white;border-radius:16px;width:52px;height:52px;display:grid;place-items:center;font-size:25px;font-weight:bold}h1{font-size:24px;margin:22px 0 8px}p{line-height:1.7;color:#7484a0}label{display:block;font-weight:600;margin-top:26px}input{width:100%;font:inherit;border-radius:10px;border:1px solid #ccdaf0;padding:13px;margin-top:10px;outline-color:#3d8cff}button{width:100%;border:0;border-radius:10px;background:linear-gradient(110deg,#297bfa,#1356c5);color:white;font:inherit;font-weight:600;margin-top:16px;padding:13px;cursor:pointer}#error{color:#c43b54;min-height:18px}small{display:block;color:#7e8da6;line-height:1.6}</style>
-</head><body><main><div class="mark">T.</div><h1>TransDot Desktop 2.0</h1><p>轻量 Windows 客户端。连接你自己的服务器，然后在 Android APP 扫码配对。收到新的文字和图片时，自动写入系统剪贴板。</p>
-<form id="serverForm"><label for="server">服务器 HTTPS 地址</label><input id="server" type="url" placeholder="https://transdot.example.com:9004" required><button>连接服务器</button></form>
-<p id="error" role="alert"></p><small>无需更新服务器。关闭窗口将继续驻留系统托盘；托盘菜单可以暂停复制、切换服务器以及设置开机启动。</small></main>
+*{box-sizing:border-box}
+body{font:15px "Segoe UI","Microsoft YaHei",sans-serif;color:#203967;background:linear-gradient(132deg,#e9f3ff,#fff 60%,#e5f1ff);margin:0;min-height:100vh;display:grid;place-items:center;padding:14px}
+main{width:min(500px,calc(100vw - 28px));max-height:calc(100vh - 28px);overflow:auto;background:#fff;border:1px solid #dce7fa;border-radius:22px;box-shadow:0 18px 70px #1553a51e;padding:28px}
+.mark{background:linear-gradient(135deg,#1fc4ff,#1046da);color:white;border-radius:15px;width:48px;height:48px;display:grid;place-items:center;font-size:23px;font-weight:bold}
+h1{font-size:23px;margin:18px 0 6px}
+h2{font-size:16px;margin:0 0 7px}
+p{line-height:1.65;color:#7484a0;margin:7px 0}
+label{display:block;font-weight:600;margin-top:16px}
+input{width:100%;font:inherit;border-radius:10px;border:1px solid #ccdaf0;padding:12px;margin-top:9px;outline-color:#3d8cff}
+button{width:100%;border:0;border-radius:10px;background:linear-gradient(110deg,#297bfa,#1356c5);color:white;font:inherit;font-weight:600;margin-top:12px;padding:12px;cursor:pointer}
+button:focus-visible,input:focus-visible{outline:2px solid #3d8cff;outline-offset:2px}
+button.secondary{background:#eef4ff;color:#2857a2}
+.section{border:1px solid #e1eafa;border-radius:15px;padding:17px;margin-top:20px;background:#fbfdff}
+.shortcut-row{display:flex;gap:9px;align-items:stretch}
+.shortcut-row input{flex:1;min-width:0;background:#f8fbff;cursor:pointer}
+.shortcut-row button{width:100px;flex:0 0 100px}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.actions button{margin-top:10px}
+#error,#shortcutStatus{min-height:18px;font-size:13px}
+#error{color:#c43b54}
+#shortcutStatus{color:#2864b7}
+small{display:block;color:#7e8da6;line-height:1.6;margin-top:8px}
+@media(max-width:420px){main{padding:20px}.shortcut-row button{width:88px;flex-basis:88px}}
+</style>
+</head>
+<body>
+<main>
+  <div class="mark">T.</div>
+  <h1>TransDot Desktop</h1>
+  <p>连接你自己的服务器。Android APP 发送新的文字或图片后，TransDot 会自动写入 Windows 系统剪贴板。</p>
+
+  <section class="section">
+    <h2>服务器设置</h2>
+    <p>填写服务器地址后，按现有 Android APP 流程扫码配对。</p>
+    <form id="serverForm">
+      <label for="server">服务器 HTTPS 地址</label>
+      <input id="server" type="url" placeholder="https://transdot.example.com:9004" required>
+      <button>连接服务器</button>
+    </form>
+    <p id="error" role="alert"></p>
+  </section>
+
+  <section class="section">
+    <h2>快速打开面板</h2>
+    <p>设置一个全局快捷键。即使 TransDot 缩到系统托盘，也可以快速唤起面板。</p>
+    <label for="shortcut">全局快捷键</label>
+    <div class="shortcut-row">
+      <input id="shortcut" type="text" value="Ctrl+Shift+T" readonly aria-label="当前全局快捷键，点击录制">
+      <button id="capture" type="button" class="secondary">录制快捷键</button>
+    </div>
+    <div class="actions">
+      <button id="saveShortcut" type="button">保存快捷键</button>
+      <button id="resetShortcut" type="button" class="secondary">恢复默认</button>
+    </div>
+    <p id="shortcutStatus" role="status" aria-live="polite">默认快捷键：Ctrl+Shift+T</p>
+    <small>支持字母、数字、F1–F12 和空格键。组合键至少包含 Ctrl、Alt 或 Win；如果与其他程序冲突，请更换组合键。</small>
+  </section>
+  <small>关闭主窗口不会退出程序。右下角系统托盘可管理自动复制、开机启动和服务器设置。</small>
+</main>
 <script>
-const input=document.getElementById('server');
-const error=document.getElementById('error');
 const invoke=(name,args)=>window.__TAURI_INTERNALS__.invoke(name,args);
-invoke('get_settings').then(data=>{input.value=data.serverUrl||''}).catch(e=>error.textContent=String(e));
-document.getElementById('serverForm').addEventListener('submit',async(event)=>{
- event.preventDefault();error.textContent='';
- try {await invoke('configure_server',{value:input.value.trim()});}
- catch(e){error.textContent=String(e)}
+const serverInput=document.getElementById('server');
+const serverError=document.getElementById('error');
+const shortcutInput=document.getElementById('shortcut');
+const shortcutStatus=document.getElementById('shortcutStatus');
+const captureButton=document.getElementById('capture');
+let recording=false;
+
+invoke('get_settings').then(data=>{
+  serverInput.value=data.serverUrl||'';
+  shortcutInput.value=data.shortcut||'Ctrl+Shift+T';
+}).catch(error=>{serverError.textContent=String(error)});
+
+document.getElementById('serverForm').addEventListener('submit',async event=>{
+  event.preventDefault();
+  serverError.textContent='';
+  try { await invoke('configure_server',{value:serverInput.value.trim()}); }
+  catch(error){ serverError.textContent=String(error); }
 });
-</script></body></html>
+
+function beginRecording(){
+  recording=true;
+  shortcutInput.value='按下快捷键组合…';
+  shortcutStatus.textContent='正在录制，请按下组合键。按 Esc 可取消。';
+  shortcutInput.focus();
+}
+captureButton.addEventListener('click',beginRecording);
+shortcutInput.addEventListener('click',()=>{if(!recording) beginRecording()});
+
+document.addEventListener('keydown',event=>{
+  if(!recording) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if(event.key==='Escape'){
+    recording=false;
+    invoke('get_settings').then(data=>{shortcutInput.value=data.shortcut||'Ctrl+Shift+T'}).catch(()=>{});
+    shortcutStatus.textContent='已取消录制。';
+    return;
+  }
+  if(['Control','Shift','Alt','Meta'].includes(event.key)) return;
+  let key='';
+  if(/^Key[A-Z]$/.test(event.code)) key=event.code.slice(3);
+  else if(/^Digit[0-9]$/.test(event.code)) key=event.code.slice(5);
+  else if(/^F([1-9]|1[0-2])$/.test(event.key)) key=event.key.toUpperCase();
+  else if(event.code==='Space') key='Space';
+  if(!key){
+    shortcutStatus.textContent='此按键暂不支持，请使用字母、数字、F1–F12 或空格键。';
+    return;
+  }
+  const modifiers=[];
+  if(event.ctrlKey) modifiers.push('Ctrl');
+  if(event.altKey) modifiers.push('Alt');
+  if(event.shiftKey) modifiers.push('Shift');
+  if(event.metaKey) modifiers.push('Super');
+  if(!event.ctrlKey&&!event.altKey&&!event.metaKey){
+    shortcutStatus.textContent='请至少同时按住 Ctrl、Alt 或 Win。';
+    return;
+  }
+  shortcutInput.value=[...modifiers,key].join('+');
+  recording=false;
+  shortcutStatus.textContent='快捷键已录制，点击“保存快捷键”后生效。';
+},true);
+
+async function saveShortcut(){
+  shortcutStatus.textContent='';
+  try{
+    const saved=await invoke('configure_shortcut',{value:shortcutInput.value});
+    shortcutInput.value=saved;
+    shortcutStatus.textContent='快捷键已保存：'+saved;
+  }catch(error){ shortcutStatus.textContent=String(error); }
+}
+document.getElementById('saveShortcut').addEventListener('click',saveShortcut);
+document.getElementById('resetShortcut').addEventListener('click',async()=>{
+  shortcutInput.value='Ctrl+Shift+T';
+  await saveShortcut();
+});
+</script>
+</body>
+</html>

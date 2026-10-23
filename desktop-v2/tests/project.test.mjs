@@ -33,22 +33,36 @@ test('installer supports simplified Chinese and optional English',()=>{
  assert.equal(config.bundle.windows.nsis.displayLanguageSelector,true)
  assert.equal(config.app.withGlobalTauri,true)
 })
-test('native tray provides clipboard self-test and privacy-safe diagnostic statuses',()=>{
+test('tray menu stays focused on daily actions and shortcut settings',()=>{
  const rust=read('src-tauri/src/main.rs')
- assert.match(rust,/receiver_diagnostic/)
- assert.match(rust,/测试写入 Windows 剪贴板/)
- assert.match(rust,/复制接收器诊断信息/)
+ assert.match(rust,/CheckMenuItem::with_id\(\s*app, "toggle", "自动复制"/)
+ assert.match(rust,/CheckMenuItem::with_id\(\s*app, "auto", "开机启动"/)
+ assert.match(rust,/快捷键设置/)
+ assert.match(rust,/打开面板/)
+ assert.match(rust,/完全退出/)
+ assert.doesNotMatch(rust,/MenuItem::with_id\(app, "diagnostics"/)
+ assert.doesNotMatch(rust,/MenuItem::with_id\(app, "test"/)
+ assert.doesNotMatch(rust,/MenuItem::with_id\(app, "remote_test"/)
 })
 
-test('tray always explicitly displays enabled versus paused states and exact action',()=>{
-  const main=read('src-tauri/src/main.rs')
-  assert.match(main,/自动复制状态：已启用/)
-  assert.match(main,/自动复制状态：已暂停/)
-  assert.match(main,/暂停自动复制/)
-  assert.match(main,/启用自动复制/)
-  assert.match(main,/toggle_label\.set_text/)
-  assert.match(main,/status_label\.set_text/)
+test('global shortcut is configurable, persistent, and defaults to Ctrl+Shift+T',()=>{
+ const rust=read('src-tauri/src/main.rs')
+ const ui=read('ui/index.html')
+ const cargo=read('src-tauri/Cargo.toml')
+ const settings=JSON.parse(read('src-tauri/capabilities/settings.json'))
+ assert.match(rust,/DEFAULT_SHORTCUT: &str = "Ctrl\+Shift\+T"/)
+ assert.match(rust,/fn normalize_shortcut/)
+ assert.match(rust,/fn configure_shortcut/)
+ assert.match(rust,/ShortcutState::Pressed/)
+ assert.match(rust,/global_shortcut\(\)\.register/)
+ assert.match(rust,/#\[serde\(rename_all = "camelCase", default\)\]/)
+ assert.match(ui,/录制快捷键/)
+ assert.match(ui,/恢复默认/)
+ assert.match(ui,/configure_shortcut/)
+ assert.match(cargo,/tauri-plugin-global-shortcut = "2"/)
+ assert.ok(settings.permissions.includes('allow-configure-shortcut'))
 })
+
 test('receiver is reinjected after remote page load and has REST fallback',()=>{
   const main=read('src-tauri/src/main.rs')
   const js=read('src-tauri/src/inject.js')
@@ -73,7 +87,7 @@ test('remote WebView custom clipboard commands have real Tauri ACL grants',()=>{
  const remote=JSON.parse(read('src-tauri/capabilities/remote.json'))
  const local=JSON.parse(read('src-tauri/capabilities/settings.json'))
  const remoteCommands=['copy_text','copy_image_png','clipboard_enabled','receiver_diagnostic']
- const localCommands=['get_settings','configure_server']
+ const localCommands=['get_settings','configure_server','configure_shortcut']
  assert.match(build,/AppManifest::new\(\)\.commands/)
  for(const command of [...remoteCommands,...localCommands]) {
    assert.ok(build.includes('"'+command+'"'), 'manifest must register '+command)

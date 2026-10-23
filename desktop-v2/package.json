@@ -1,6 +1,6 @@
 {
   "name": "transdot-desktop-tauri",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "private": true,
   "description": "Lightweight TransDot desktop receiver using Windows WebView2",
   "scripts": {
