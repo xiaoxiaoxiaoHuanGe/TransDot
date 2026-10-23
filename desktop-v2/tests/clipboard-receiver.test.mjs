@@ -48,7 +48,7 @@ async function createMockReceiver() {
   for(let n=0;n<5;n++) await new Promise(resolve=>setImmediate(resolve))
   assert.equal(sockets.length,1,'paired session starts realtime listener')
   assert.match(sockets[0].url, /^wss:\/\//)
-  return {calls,sockets, setLatestMessages: items=>{ latestMessages = items }, poll:()=>pollCallback?.()}
+  return {calls,sockets,page, setLatestMessages: items=>{ latestMessages = items }, poll:()=>pollCallback?.()}
 }
 
 test('Android text message really invokes the native clipboard command',async()=>{
@@ -102,9 +102,10 @@ test('the same message arriving via WebSocket and REST copies only once',async()
 })
 
 test('remote webview bridge self-test writes through native clipboard API',async()=>{
-  const {calls,sockets} = await createMockReceiver()
+  const {calls,sockets,page} = await createMockReceiver()
   assert.equal(sockets.length,1)
-  // The browser-side end-to-end test is available without a mobile message.
-  const probe = calls.some(call=>call.name==='receiver_diagnostic')
-  assert.equal(probe,true)
+  assert.equal(typeof page.__transdotDesktopTest,'function')
+  await page.__transdotDesktopTest()
+  assert.ok(calls.some(call=>call.name==='copy_text' && call.args.text.includes('桌面消息接收链路测试成功')))
+  assert.ok(calls.some(call=>call.name==='receiver_diagnostic' && call.args.status.includes('链路测试成功')))
 })
