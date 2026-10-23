@@ -13,6 +13,10 @@
     ]
   },
   "permissions": [
-    "core:default"
+    "core:default",
+    "allow-copy-text",
+    "allow-copy-image-png",
+    "allow-clipboard-enabled",
+    "allow-receiver-diagnostic"
   ]
 }
