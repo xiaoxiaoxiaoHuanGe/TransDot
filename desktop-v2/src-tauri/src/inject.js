@@ -91,6 +91,18 @@
   }
   async function connect() {
     if (closed || socket || location.origin !== window.__TRANSDOT_TRUSTED_ORIGIN__) return;
+    if (!window.__TAURI__?.core?.invoke && !window.__TAURI_INTERNALS__?.invoke) {
+      console.warn('[TransDot v2] Native clipboard bridge unavailable on remote origin');
+      if (document.body && !document.getElementById('__transdot_native_notice')) {
+        const notice = document.createElement('aside');
+        notice.id = '__transdot_native_notice';
+        notice.textContent = 'TransDot 桌面剪贴板组件未连接；请使用新版安装包或查看系统托盘诊断。';
+        notice.style.cssText = 'position:fixed;bottom:12px;right:12px;z-index:2147483647;padding:10px 14px;border:1px solid #e3bb76;border-radius:8px;background:#fff7e6;color:#8a5000;font:13px system-ui;max-width:360px';
+        document.body.appendChild(notice);
+      }
+      retry();
+      return;
+    }
     try {
       const result = await fetch("/api/v1/auth/session",
         {credentials:"same-origin",cache:"no-store"});
@@ -98,6 +110,7 @@
       const session = await result.json();
       if (!session.authenticated || typeof session.device_id !== "string") {retry();return;}
       ownDeviceId = session.device_id;
+      await updateStatus('已授权电脑，正在连接实时消息');
       const url = new URL("/ws", location.href);
       url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
       socket = new WebSocket(url.toString());
@@ -109,7 +122,11 @@
           if (["device.revoked","device.replaced"].includes(packet.type)) socket?.close();
         } catch (error) {console.warn("[TransDot v2] Bad WebSocket event",error);}
       };
-      socket.onclose = () => {socket=null;retry();};
+      socket.onclose = () => {
+        socket = null;
+        void updateStatus('实时消息已断开，尝试重连');
+        retry();
+      };
       socket.onerror = () => {};
     } catch (error) {
       console.warn("[TransDot v2] Waiting for session:",error);
