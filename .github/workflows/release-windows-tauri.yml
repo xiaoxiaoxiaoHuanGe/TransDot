@@ -47,7 +47,7 @@ jobs:
           $exeFiles = @(Get-ChildItem 'desktop-v2/src-tauri/target/release/bundle/nsis' -Filter '*-setup.exe')
           if ($exeFiles.Count -ne 1) { throw "Expected one installer, got $($exeFiles.Count)" }
           $exe = $exeFiles[0]
-          if ($exe.Name -notmatch '2\.0\.3') { throw "Wrong installer filename $($exe.Name)" }
+          if ($exe.Name -notmatch '2\.0\.4') { throw "Wrong installer filename $($exe.Name)" }
           if ($exe.Length -gt 15MB) { throw "Installer exceeds 15 MiB target" }
           $digest = (Get-FileHash -Algorithm SHA256 -Path $exe.FullName).Hash.ToLowerInvariant()
           "$digest  $($exe.Name)" | Set-Content -Path "$($exe.FullName).sha256" -Encoding ascii
