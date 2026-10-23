@@ -39,3 +39,21 @@ test('native tray provides clipboard self-test and privacy-safe diagnostic statu
  assert.match(rust,/测试写入 Windows 剪贴板/)
  assert.match(rust,/复制接收器诊断信息/)
 })
+
+test('tray always explicitly displays enabled versus paused states and exact action',()=>{
+  const main=read('src-tauri/src/main.rs')
+  assert.match(main,/自动复制状态：已启用/)
+  assert.match(main,/自动复制状态：已暂停/)
+  assert.match(main,/暂停自动复制/)
+  assert.match(main,/启用自动复制/)
+  assert.match(main,/toggle_label\.set_text/)
+  assert.match(main,/status_label\.set_text/)
+})
+test('receiver is reinjected after remote page load and has REST fallback',()=>{
+  const main=read('src-tauri/src/main.rs')
+  const js=read('src-tauri/src/inject.js')
+  assert.match(main,/\.on_page_load/)
+  assert.match(main,/window\.eval\(&script\)/)
+  assert.match(js,/pollNewMessages/)
+  assert.match(js,/latestInitialized/)
+})
