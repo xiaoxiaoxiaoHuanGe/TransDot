@@ -1,6 +1,6 @@
 [package]
 name = "transdot_desktop"
-version = "2.0.2"
+version = "2.0.3"
 description = "TransDot Windows desktop receiver"
 edition = "2021"
 rust-version = "1.90"
