@@ -13,10 +13,14 @@
   let counter = 0;
   const seen = new Set();
   const invoke = (name, args) => {
-    const fn = window.__TAURI_INTERNALS__?.invoke;
+    const fn = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
     if (typeof fn !== "function") throw new Error("Tauri IPC unavailable");
     return fn(name, args);
   };
+  async function updateStatus(status) {
+    try { await invoke('receiver_diagnostic', {status}); }
+    catch (error) { console.warn('[TransDot v2] diagnostic unavailable:', error); }
+  }
   function retry() {
     if (closed || timer) return;
     timer = setTimeout(() => { timer = null; connect(); }, 2300);
@@ -54,10 +58,17 @@
     if (seen.size > 1024) seen.clear();
     seen.add(message.id);
     const requestId = ++counter;
+    await updateStatus('收到新' + (message.type === 'text' ? '文字' : '图片') + '，准备写入');
     try {
-      if (!await invoke("clipboard_enabled")) return;
+      if (!await invoke("clipboard_enabled")) {
+        await updateStatus('收到消息，但自动复制已暂停或来源校验失败');
+        return;
+      }
       if (message.type === "text" && typeof message.text_content === "string") {
-        if (requestId === counter) await invoke("copy_text", {text: message.text_content});
+        if (requestId === counter) {
+          await invoke("copy_text", {text: message.text_content});
+          await updateStatus('最新文字已写入 Windows 剪贴板');
+        }
       } else if (message.type === "image" &&
                  message.file?.status === "available" &&
                  message.file?.size_bytes <= 12*1024*1024) {
@@ -68,10 +79,14 @@
         const blob = await response.blob();
         if (blob.size > 12*1024*1024 || !blob.type.startsWith("image/")) return;
         const data = await imageAsPngBase64(blob);
-        if (data && requestId === counter) await invoke("copy_image_png", {data});
+        if (data && requestId === counter) {
+          await invoke("copy_image_png", {data});
+          await updateStatus('最新图片已写入 Windows 剪贴板');
+        }
       }
     } catch (error) {
       console.warn("[TransDot v2] Clipboard sync error:",error);
+      await updateStatus('剪贴板操作失败: ' + String(error).slice(0,180));
     }
   }
   async function connect() {
@@ -79,13 +94,14 @@
     try {
       const result = await fetch("/api/v1/auth/session",
         {credentials:"same-origin",cache:"no-store"});
-      if (!result.ok) {retry();return;}
+      if (!result.ok) { await updateStatus('等待设备授权: HTTP ' + result.status); retry();return;}
       const session = await result.json();
       if (!session.authenticated || typeof session.device_id !== "string") {retry();return;}
       ownDeviceId = session.device_id;
       const url = new URL("/ws", location.href);
       url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
       socket = new WebSocket(url.toString());
+      socket.onopen = () => { void updateStatus('WebSocket 已连接，等待新消息'); };
       socket.onmessage = event => {
         try {
           const packet = JSON.parse(event.data);
