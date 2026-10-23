@@ -27,6 +27,14 @@ impl Default for Settings {
 
 struct Shared(Mutex<Settings>);
 
+// No message contents, tokens or device identifiers are recorded.
+struct ReceiverStatus(Mutex<String>);
+fn record_status(app: &AppHandle, message: &str) {
+    if let Ok(mut status) = app.state::<ReceiverStatus>().0.lock() {
+        *status = message.chars().take(240).collect();
+    }
+}
+
 fn settings_file(app: &AppHandle) -> Result<PathBuf, String> {
     let folder = app.path().app_config_dir().map_err(|e| e.to_string())?;
     fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
@@ -141,6 +149,20 @@ fn copy_image_png(
         .map_err(|e| e.to_string())
 }
 
+// Diagnostics do not depend on auto-copy being enabled.
+#[tauri::command]
+fn receiver_diagnostic(
+    window: WebviewWindow, app: AppHandle, state: State<'_, Shared>, status: String,
+) -> Result<(), String> {
+    if window.label() != "remote" { return Err("Invalid window".into()); }
+    let expected = state.0.lock().map_err(|e| e.to_string())?.server_url.clone();
+    if expected.is_empty() || !origin_matches(
+        &window.url().map_err(|e| e.to_string())?.to_string(), &expected
+    ) { return Err("Invalid server origin".into()); }
+    record_status(&app, &status);
+    Ok(())
+}
+
 #[tauri::command]
 fn clipboard_enabled(window: WebviewWindow, state: State<'_, Shared>) -> bool {
     verify_remote(&window, &state).is_ok()
@@ -191,18 +213,21 @@ fn main() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--hidden"])))
         .invoke_handler(tauri::generate_handler![
-            get_settings, configure_server, copy_text, copy_image_png, clipboard_enabled
+            get_settings, configure_server, copy_text, copy_image_png, clipboard_enabled, receiver_diagnostic
         ])
         .setup(|app| {
             let handle = app.handle();
             let initial = read_settings(handle);
             app.manage(Shared(Mutex::new(initial.clone())));
+            app.manage(ReceiverStatus(Mutex::new("等待网页与剪贴板接收器连接".into())));
             let open = MenuItem::with_id(app, "open", "打开 TransDot", true, None::<&str>)?;
             let toggle = MenuItem::with_id(app, "toggle", "暂停/启用自动复制", true, None::<&str>)?;
             let auto = MenuItem::with_id(app, "auto", "切换开机启动", true, None::<&str>)?;
             let setup = MenuItem::with_id(app, "setup", "更换服务器", true, None::<&str>)?;
+            let test = MenuItem::with_id(app, "test", "测试写入 Windows 剪贴板", true, None::<&str>)?;
+            let diagnostics = MenuItem::with_id(app, "diagnostics", "复制接收器诊断信息", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "完全退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open,&toggle,&auto,&setup,&quit])?;
+            let menu = Menu::with_items(app, &[&open,&toggle,&auto,&setup,&test,&diagnostics,&quit])?;
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip("TransDot · 跨设备自动剪贴板")
@@ -234,6 +259,23 @@ fn main() {
                     "setup" => {
                         if let Some(w) = app.get_webview_window("remote") { w.hide().ok(); }
                         let _ = open_settings(app);
+                    }
+                    "test" => {
+                        let result = app.clipboard().write_text(
+                            "TransDot v2.0.1：Windows 系统剪贴板写入测试成功。"
+                        );
+                        if let Err(err) = result {
+                            record_status(app, &format!("本机剪贴板写入失败: {err}"));
+                        } else {
+                            record_status(app, "本机测试已写入，请打开记事本按 Ctrl+V");
+                        }
+                    }
+                    "diagnostics" => {
+                        let msg = app.state::<ReceiverStatus>().0.lock()
+                            .map(|s| s.clone()).unwrap_or_else(|_| "状态不可读取".into());
+                        let _ = app.clipboard().write_text(
+                            format!("TransDot Desktop v2.0.1 接收器诊断\n{msg}")
+                        );
                     }
                     "quit" => app.exit(0),
                     _ => (),
