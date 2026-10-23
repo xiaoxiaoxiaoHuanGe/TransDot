@@ -57,3 +57,12 @@ test('receiver is reinjected after remote page load and has REST fallback',()=>{
   assert.match(js,/pollNewMessages/)
   assert.match(js,/latestInitialized/)
 })
+
+test('remote clipboard end-to-end self-test is wired in both Rust and injected JS',()=>{
+ const rust=read('src-tauri/src/main.rs')
+ const js=read('src-tauri/src/inject.js')
+ assert.match(rust,/测试消息接收链路/)
+ assert.match(rust,/__transdotDesktopTest/)
+ assert.match(js,/window\.__transdotDesktopTest\s*=/)
+ assert.match(js,/桌面消息接收链路测试成功/)
+})
