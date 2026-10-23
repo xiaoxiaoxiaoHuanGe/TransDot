@@ -202,8 +202,20 @@ fn open_remote(app: &AppHandle, origin: &str, visible: bool) -> Result<(), Strin
         .min_inner_size(720.0, 500.0)
         .visible(visible)
         .enable_clipboard_access()
-        .initialization_script(script)
-        .on_navigation(move |url| url.origin().ascii_serialization() == allowed_origin)
+        .initialization_script(script.clone())
+        // Some remote pages complete the document lifecycle before their injected
+        // initialization script has a usable Tauri bridge. Re-inject after Finish.
+        .on_page_load(move |window, payload| {
+            if payload.event() != tauri::webview::PageLoadEvent::Finished { return; }
+            let actual = match window.url() {
+                Ok(url) => url,
+                Err(_) => return,
+            };
+            if !origin_matches(actual.as_str(), &allowed_origin) { return; }
+            record_status(&window.app_handle(), "服务端网页已加载，正在启动实时接收器");
+            let _ = window.eval(&script);
+        })
+        .on_navigation(move |url| url.origin().ascii_serialization() == origin.to_string())
         .build()
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -222,19 +234,28 @@ fn main() {
             app.manage(Shared(Mutex::new(initial.clone())));
             app.manage(ReceiverStatus(Mutex::new("等待网页与剪贴板接收器连接".into())));
             let open = MenuItem::with_id(app, "open", "打开 TransDot", true, None::<&str>)?;
-            let toggle = MenuItem::with_id(app, "toggle", "暂停/启用自动复制", true, None::<&str>)?;
+            let current_state = if initial.copy_enabled { "已启用" } else { "已暂停" };
+            let state_item = MenuItem::with_id(app, "state", format!("自动复制状态：{current_state}"), false, None::<&str>)?;
+            let toggle = MenuItem::with_id(
+                app, "toggle",
+                if initial.copy_enabled { "暂停自动复制" } else { "启用自动复制" },
+                true, None::<&str>
+            )?;
             let auto = MenuItem::with_id(app, "auto", "切换开机启动", true, None::<&str>)?;
             let setup = MenuItem::with_id(app, "setup", "更换服务器", true, None::<&str>)?;
             let test = MenuItem::with_id(app, "test", "测试写入 Windows 剪贴板", true, None::<&str>)?;
             let diagnostics = MenuItem::with_id(app, "diagnostics", "复制接收器诊断信息", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "完全退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open,&toggle,&auto,&setup,&test,&diagnostics,&quit])?;
+            let menu = Menu::with_items(app, &[&open,&state_item,&toggle,&auto,&setup,&test,&diagnostics,&quit])?;
+            // Keep menu labels synchronized with the saved state, even after reboot.
+            let toggle_label = toggle.clone();
+            let status_label = state_item.clone();
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip("TransDot · 跨设备自动剪贴板")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
-                .on_menu_event(|app,event| match event.id.as_ref() {
+                .on_menu_event(move |app,event| match event.id.as_ref() {
                     "open" => {
                         if let Some(w) = app.get_webview_window("remote") {
                             w.show().ok(); w.set_focus().ok();
@@ -244,10 +265,29 @@ fn main() {
                     }
                     "toggle" => {
                         let shared = app.state::<Shared>();
-                        if let Ok(mut s) = shared.0.lock() {
-                            s.copy_enabled = !s.copy_enabled;
-                            let _ = save_settings(app, &s);
+                        let mut is_enabled = None;
+                        if let Ok(mut settings) = shared.0.lock() {
+                            settings.copy_enabled = !settings.copy_enabled;
+                            let _ = save_settings(app, &settings);
+                            is_enabled = Some(settings.copy_enabled);
                         };
+                        if let Some(enabled) = is_enabled {
+                            let _ = status_label.set_text(if enabled {
+                                "自动复制状态：已启用"
+                            } else {
+                                "自动复制状态：已暂停"
+                            });
+                            let _ = toggle_label.set_text(if enabled {
+                                "暂停自动复制"
+                            } else {
+                                "启用自动复制"
+                            });
+                            record_status(app, if enabled {
+                                "用户已启用自动复制"
+                            } else {
+                                "用户已暂停自动复制"
+                            });
+                        }
                     }
                     "auto" => {
                         let manager = app.autolaunch();
