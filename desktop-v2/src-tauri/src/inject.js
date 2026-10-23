@@ -11,6 +11,9 @@
   let timer = null;
   let ownDeviceId = "";
   let counter = 0;
+  let pollTimer = null;
+  let polling = false;
+  let latestInitialized = false;
   const seen = new Set();
   const invoke = (name, args) => {
     const fn = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
@@ -89,6 +92,34 @@
       await updateStatus('剪贴板操作失败: ' + String(error).slice(0,180));
     }
   }
+  // REST is the durable source of truth. WebSocket wakes us immediately,
+  // while this fallback handles dropped events or a disconnected socket.
+  // The first successful fetch only seeds IDs: no historical clipboard writes.
+  async function pollNewMessages() {
+    if (closed || polling || !ownDeviceId) return;
+    polling = true;
+    try {
+      const response = await fetch('/api/v1/messages?limit=50', {
+        credentials: 'same-origin', cache: 'no-store'
+      });
+      if (!response.ok) throw new Error('消息校验 HTTP ' + response.status);
+      const page = await response.json();
+      if (!Array.isArray(page.messages)) throw new Error('消息列表格式无效');
+      const sorted = page.messages.slice().sort((a,b) =>
+        Date.parse(a.created_at || '') - Date.parse(b.created_at || ''));
+      if (!latestInitialized) {
+        for (const m of sorted) if (typeof m.id === 'string') seen.add(m.id);
+        latestInitialized = true;
+        await updateStatus('接收器已就绪：实时监听及消息校验均已启用');
+      } else {
+        for (const message of sorted) void onCreated(message);
+      }
+    } catch (error) {
+      await updateStatus('消息校验失败：' + String(error).slice(0,120));
+    } finally {
+      polling = false;
+    }
+  }
   async function connect() {
     if (closed || socket || location.origin !== window.__TRANSDOT_TRUSTED_ORIGIN__) return;
     if (!window.__TAURI__?.core?.invoke && !window.__TAURI_INTERNALS__?.invoke) {
@@ -111,6 +142,10 @@
       if (!session.authenticated || typeof session.device_id !== "string") {retry();return;}
       ownDeviceId = session.device_id;
       await updateStatus('已授权电脑，正在连接实时消息');
+      if (!pollTimer) {
+        await pollNewMessages();
+        pollTimer = setInterval(() => { void pollNewMessages(); }, 4000);
+      }
       const url = new URL("/ws", location.href);
       url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
       socket = new WebSocket(url.toString());
@@ -136,6 +171,7 @@
   window.addEventListener("pagehide",()=> {
     closed = true; counter++;
     if (timer) clearTimeout(timer);
+    if (pollTimer) clearInterval(pollTimer);
     socket?.close(); socket=null;
   },{once:true});
   const start=()=>{connect();};
