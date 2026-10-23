@@ -13,7 +13,7 @@ use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
-const DEFAULT_SHORTCUT: &str = "Ctrl+Shift+T";
+const DEFAULT_SHORTCUT: &str = "Ctrl+Alt+T";
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -353,7 +353,7 @@ fn main() {
                         settings.shortcut = DEFAULT_SHORTCUT.to_string();
                         let _ = save_settings(handle, &settings);
                     }
-                    record_status(handle, "自定义快捷键不可用，已恢复默认 Ctrl+Shift+T");
+                    record_status(handle, "自定义快捷键不可用，已恢复默认 Ctrl+Alt+T");
                 } else {
                     record_status(handle, "全局快捷键不可用，请在快捷键设置中更换组合键");
                 }
@@ -457,7 +457,7 @@ mod tests {
 
     #[test]
     fn shortcut_normalization_requires_a_modifier_and_supported_key() {
-        assert_eq!(normalize_shortcut("ctrl+shift+t").unwrap(), "Ctrl+Shift+T");
+        assert_eq!(normalize_shortcut("ctrl+shift+t").unwrap(), "Ctrl+Alt+T");
         assert_eq!(normalize_shortcut("Alt+F8").unwrap(), "Alt+F8");
         assert_eq!(normalize_shortcut("Win+1").unwrap(), "Super+1");
         assert!(normalize_shortcut("T").is_err());

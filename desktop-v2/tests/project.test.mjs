@@ -50,7 +50,7 @@ test('global shortcut is configurable, persistent, and defaults to Ctrl+Shift+T'
  const ui=read('ui/index.html')
  const cargo=read('src-tauri/Cargo.toml')
  const settings=JSON.parse(read('src-tauri/capabilities/settings.json'))
- assert.match(rust,/DEFAULT_SHORTCUT: &str = "Ctrl\+Shift\+T"/)
+ assert.match(rust,/DEFAULT_SHORTCUT: &str = "Ctrl\+Alt\+T"/)
  assert.match(rust,/fn normalize_shortcut/)
  assert.match(rust,/fn configure_shortcut/)
  assert.match(rust,/ShortcutState::Pressed/)

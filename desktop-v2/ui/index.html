@@ -53,14 +53,14 @@ small{display:block;color:#7e8da6;line-height:1.6;margin-top:8px}
     <p>设置一个全局快捷键。即使 TransDot 缩到系统托盘，也可以快速唤起面板。</p>
     <label for="shortcut">全局快捷键</label>
     <div class="shortcut-row">
-      <input id="shortcut" type="text" value="Ctrl+Shift+T" readonly aria-label="当前全局快捷键，点击录制">
+      <input id="shortcut" type="text" value="Ctrl+Alt+T" readonly aria-label="当前全局快捷键，点击录制">
       <button id="capture" type="button" class="secondary">录制快捷键</button>
     </div>
     <div class="actions">
       <button id="saveShortcut" type="button">保存快捷键</button>
       <button id="resetShortcut" type="button" class="secondary">恢复默认</button>
     </div>
-    <p id="shortcutStatus" role="status" aria-live="polite">默认快捷键：Ctrl+Shift+T</p>
+    <p id="shortcutStatus" role="status" aria-live="polite">默认快捷键：Ctrl+Alt+T</p>
     <small>支持字母、数字、F1–F12 和空格键。组合键至少包含 Ctrl、Alt 或 Win；如果与其他程序冲突，请更换组合键。</small>
   </section>
   <small>关闭主窗口不会退出程序。右下角系统托盘可管理自动复制、开机启动和服务器设置。</small>
@@ -76,7 +76,7 @@ let recording=false;
 
 invoke('get_settings').then(data=>{
   serverInput.value=data.serverUrl||'';
-  shortcutInput.value=data.shortcut||'Ctrl+Shift+T';
+  shortcutInput.value=data.shortcut||'Ctrl+Alt+T';
 }).catch(error=>{serverError.textContent=String(error)});
 
 document.getElementById('serverForm').addEventListener('submit',async event=>{
@@ -101,7 +101,7 @@ document.addEventListener('keydown',event=>{
   event.stopPropagation();
   if(event.key==='Escape'){
     recording=false;
-    invoke('get_settings').then(data=>{shortcutInput.value=data.shortcut||'Ctrl+Shift+T'}).catch(()=>{});
+    invoke('get_settings').then(data=>{shortcutInput.value=data.shortcut||'Ctrl+Alt+T'}).catch(()=>{});
     shortcutStatus.textContent='已取消录制。';
     return;
   }
@@ -139,7 +139,7 @@ async function saveShortcut(){
 }
 document.getElementById('saveShortcut').addEventListener('click',saveShortcut);
 document.getElementById('resetShortcut').addEventListener('click',async()=>{
-  shortcutInput.value='Ctrl+Shift+T';
+  shortcutInput.value='Ctrl+Alt+T';
   await saveShortcut();
 });
 </script>
