@@ -6,6 +6,8 @@
     "settings"
   ],
   "permissions": [
-    "core:default"
+    "core:default",
+    "allow-get-settings",
+    "allow-configure-server"
   ]
 }
