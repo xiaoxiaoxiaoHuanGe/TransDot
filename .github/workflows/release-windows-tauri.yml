@@ -1,16 +1,32 @@
-name: Publish TransDot Desktop v2.0.4
+name: Publish TransDot Desktop v2.0.5
 on:
   push:
     branches: [main]
     paths:
       - 'desktop-v2/**'
       - '.github/workflows/release-windows-tauri.yml'
-      - '.github/release-notes/desktop-v2.0.4.md'
+      - '.github/release-notes/desktop-v2.0.5.md'
   workflow_dispatch:
 permissions:
   contents: write
 jobs:
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+      - run: npm run build
   release:
+    needs: web
     if: github.ref == 'refs/heads/main'
     runs-on: windows-latest
     timeout-minutes: 40
@@ -43,11 +59,11 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $version = (Get-Content desktop-v2/package.json -Raw | ConvertFrom-Json).version
-          if ($version -ne '2.0.4') { throw "Wrong version $version" }
+          if ($version -ne '2.0.5') { throw "Wrong version $version" }
           $exeFiles = @(Get-ChildItem 'desktop-v2/src-tauri/target/release/bundle/nsis' -Filter '*-setup.exe')
           if ($exeFiles.Count -ne 1) { throw "Expected one installer, got $($exeFiles.Count)" }
           $exe = $exeFiles[0]
-          if ($exe.Name -notmatch '2\.0\.4') { throw "Wrong installer filename $($exe.Name)" }
+          if ($exe.Name -notmatch '2\.0\.5') { throw "Wrong installer filename $($exe.Name)" }
           if ($exe.Length -gt 15MB) { throw "Installer exceeds 15 MiB target" }
           $digest = (Get-FileHash -Algorithm SHA256 -Path $exe.FullName).Hash.ToLowerInvariant()
           "$digest  $($exe.Name)" | Set-Content -Path "$($exe.FullName).sha256" -Encoding ascii
@@ -58,15 +74,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $tag = 'v2.0.4'
+          $tag = 'v2.0.5'
           # gh release create fails without overwriting anything if the tag already exists.
           $exe = @(Get-ChildItem 'desktop-v2/src-tauri/target/release/bundle/nsis' -Filter '*-setup.exe')[0]
-          gh release create $tag "$($exe.FullName)" "$($exe.FullName).sha256" --repo "$env:GITHUB_REPOSITORY" --target "$env:GITHUB_SHA" --title 'TransDot Desktop v2.0.4 (Windows)' --notes-file '.github/release-notes/desktop-v2.0.4.md' --latest
+          gh release create $tag "$($exe.FullName)" "$($exe.FullName).sha256" --repo "$env:GITHUB_REPOSITORY" --target "$env:GITHUB_SHA" --title 'TransDot Desktop v2.0.5 (Windows)' --notes-file '.github/release-notes/desktop-v2.0.5.md' --latest
           if ($LASTEXITCODE -ne 0) { throw "Release creation failed" }
       - name: Upload installer artifact as backup
         uses: actions/upload-artifact@v4
         with:
-          name: TransDot-Desktop-v2.0.4-Windows
+          name: TransDot-Desktop-v2.0.5-Windows
           path: |
             desktop-v2/src-tauri/target/release/bundle/nsis/*-setup.exe
             desktop-v2/src-tauri/target/release/bundle/nsis/*-setup.exe.sha256

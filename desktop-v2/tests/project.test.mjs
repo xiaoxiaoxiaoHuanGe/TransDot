@@ -3,6 +3,18 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 const root=new URL('../',import.meta.url)
 const read=p=>fs.readFileSync(new URL(p,root),'utf8')
+
+test('the first Tauri plugin handles repeat launches by opening the existing panel', () => {
+  const main = read('src-tauri/src/main.rs')
+  assert.match(main, /Builder::default\(\)\s*\.plugin\(tauri_plugin_single_instance::init/)
+  assert.match(main, /tauri_plugin_single_instance::init\(\|app, args, _cwd\|[\s\S]*?open_panel\(app\)/)
+  assert.match(main, /window\.unminimize\(\)/)
+})
+
+test('the remote WebView uses the Windows logon profile before navigation', () => {
+  const main = read('src-tauri/src/main.rs')
+  assert.match(main, /\.data_directory\(session_profile::directory\(app\)\?\)/)
+})
 test('Tauri uses system WebView2 instead of embedded Chromium',()=>{
  const config=JSON.parse(read('src-tauri/tauri.conf.json'))
  assert.equal(config.bundle.targets[0],'nsis')

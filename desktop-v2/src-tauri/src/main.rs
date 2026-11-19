@@ -13,6 +13,8 @@ use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
+mod session_profile;
+
 const DEFAULT_SHORTCUT: &str = "Ctrl+Alt+T";
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -270,6 +272,7 @@ fn open_panel(app: &AppHandle) -> Result<(), String> {
 fn open_settings(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("settings") {
         window.show().map_err(|e| e.to_string())?;
+        window.unminimize().ok();
         window.set_focus().ok();
         return Ok(());
     }
@@ -285,7 +288,11 @@ fn open_settings(app: &AppHandle) -> Result<(), String> {
 
 fn open_remote(app: &AppHandle, origin: &str, visible: bool) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("remote") {
-        if visible { window.show().ok(); window.set_focus().ok(); }
+        if visible {
+            window.show().map_err(|e| e.to_string())?;
+            window.unminimize().ok();
+            window.set_focus().ok();
+        }
         return Ok(());
     }
     let url = url::Url::parse(origin).map_err(|e| e.to_string())?;
@@ -301,6 +308,7 @@ fn open_remote(app: &AppHandle, origin: &str, visible: bool) -> Result<(), Strin
         .inner_size(1160.0, 790.0)
         .min_inner_size(720.0, 500.0)
         .visible(visible)
+        .data_directory(session_profile::directory(app)?)
         .enable_clipboard_access()
         .initialization_script(script.clone())
         // Some remote pages complete the document lifecycle before their injected
@@ -323,6 +331,11 @@ fn open_remote(app: &AppHandle, origin: &str, visible: bool) -> Result<(), Strin
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if !args.iter().skip(1).any(|arg| arg == "--hidden") {
+                let _ = open_panel(app);
+            }
+        }))
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--hidden"])))
         .plugin(

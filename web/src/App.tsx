@@ -4,7 +4,8 @@ import { QRCodeSVG } from 'qrcode.react'
 import { LanTransferView } from './lan/LanTransferView'
 import { instanceHostLabel, pairingTransportGuidance, parseRetryAfterSeconds, unauthenticatedFlow } from './pairingPolicy'
 import { RebindStatus, rebindScreenForStatus } from './rebindPolicy'
-import { DownloadDirectory, downloadFilesToDirectory, fileFingerprint, partitionRepeatedFiles } from './transferTools'
+import { fileFingerprint, partitionRepeatedFiles } from './transferTools'
+import { downloadFilesInBrowser } from './browserDownloads'
 import {
   defaultBrowserDeviceName,
   applyDeviceDisplayName,
@@ -620,7 +621,6 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
   const [downloadSelectionOpen, setDownloadSelectionOpen] = useState(false)
   const [selectedDownloadIDs, setSelectedDownloadIDs] = useState<Set<string>>(new Set())
   const [batchDownloading, setBatchDownloading] = useState(false)
-  const [batchDownloadReport, setBatchDownloadReport] = useState<{ success: string[], failed: string[] } | null>(null)
   const [dragging, setDragging] = useState(false)
   const [viewer, setViewer] = useState<{ images: TimelineMessage[], index: number } | null>(null)
   const [isAtBottom, setIsAtBottom] = useState(true)
@@ -1196,60 +1196,28 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
   }, [batchDownloading])
 
   const startBatchDownload = useCallback(async () => {
-    const selected = downloadableMessages.filter((message) => selectedDownloadIDs.has(message.id))
-    if (selected.length === 0 || batchDownloading) return
-    const picker = (window as Window & {
-      showDirectoryPicker?: (options?: { id?: string, mode?: 'read' | 'readwrite' }) => Promise<unknown>
-    }).showDirectoryPicker
-    if (!picker || !window.isSecureContext) {
-      setActionNotice('当前浏览器不支持目录保存，将逐个下载；请允许多文件下载。')
-      selected.forEach((message, index) => {
-        window.setTimeout(() => {
-          const anchor = document.createElement('a')
-          anchor.href = message.file?.download_url || ''
-          anchor.download = message.file?.original_filename || 'download'
-          anchor.click()
-        }, index * 180)
-      })
-      closeDownloadSelection()
-      return
-    }
+    const urls = downloadableMessages.flatMap(({ id, file }) =>
+      selectedDownloadIDs.has(id) && file?.download_url ? [file.download_url] : [],
+    )
+    if (urls.length === 0 || batchDownloadAbortRef.current) return
+    const controller = new AbortController()
+    batchDownloadAbortRef.current = controller
+    setBatchDownloading(true)
+    setActionNotice('')
     try {
-      const directory = await picker({ id: 'transdot-downloads', mode: 'readwrite' }) as DownloadDirectory
-      const controller = new AbortController()
-      batchDownloadAbortRef.current = controller
-      setBatchDownloading(true)
-      const results = await downloadFilesToDirectory(
-        selected.map((message) => ({
-          filename: message.file?.original_filename || 'download',
-          url: message.file?.download_url || '',
-        })),
-        directory,
-        fetch,
-        controller.signal,
-      )
-      if (controller.signal.aborted) {
-        setActionNotice('已取消批量下载。')
-      } else {
-        const successCount = results.filter((result) => result.status === 'fulfilled').length
-        const failureCount = results.length - successCount
-        setBatchDownloadReport({
-          success: results.filter((result) => result.status === 'fulfilled').map((result) => result.filename),
-          failed: results.filter((result) => result.status === 'rejected').map((result) => result.source.filename),
-        })
-        setActionNotice(failureCount === 0
-          ? `已保存 ${successCount} 个文件。`
-          : `已保存 ${successCount} 个，${failureCount} 个失败。`)
-      }
+      const started = await downloadFilesInBrowser(urls, controller.signal)
+      setActionNotice(controller.signal.aborted
+        ? `已停止发起下载，已提交 ${started} 个文件。`
+        : `已发起 ${started} 个下载。若浏览器询问，请允许下载多个文件。`)
       setDownloadSelectionOpen(false)
       setSelectedDownloadIDs(new Set())
     } catch (error) {
-      if (!isAbort(error)) setErrorMessage(error instanceof Error ? error.message : '无法批量下载文件。')
+      setErrorMessage(error instanceof Error ? error.message : '无法发起批量下载。')
     } finally {
       batchDownloadAbortRef.current = null
       setBatchDownloading(false)
     }
-  }, [batchDownloading, closeDownloadSelection, downloadableMessages, selectedDownloadIDs])
+  }, [downloadableMessages, selectedDownloadIDs])
 
   const groupedMessages = useMemo(() => groupTimelineMessages(messages), [messages])
 
@@ -1265,25 +1233,18 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
       onDrop={handleDrop}
     >
       <header className="timeline-topbar">
-        <div className="timeline-heading">
-          <Brand />
-          <div>
-            <h1>私人时间线</h1>
-            <p>Android Master ↔ Windows</p>
-          </div>
-        </div>
-        <div className="timeline-actions">
-          <ThemeSwitch />
+        <Brand connection={connection} />
+        <div className="timeline-preferences">
           <button className="batch-action device-name-command" type="button" onClick={() => setDeviceNameOpen(true)}>
             本设备：{currentDeviceName}
           </button>
+          <ThemeSwitch />
+        </div>
+        <div className="timeline-actions">
           <button className="batch-action" type="button" onClick={onRebindPhone}>重新绑定手机</button>
           <button className="batch-action lan-mode-command" type="button" onClick={() => setLanOpen(true)}>
             <LanTransferIcon /><span>局域网快传</span>
           </button>
-          <span className={`connection-badge connection-badge--${connection}`}>
-            <span />{connection === 'connected' ? '实时连接' : connection === 'connecting' ? '正在连接' : '等待重连'}
-          </span>
           {selecting ? <>
             <button className="batch-action" type="button" title="仅选择当前已加载的消息" onClick={() => setSelectedIDs(selectedIDs.size === messages.length ? new Set() : new Set(messages.map((message) => message.id)))}>全选已加载 / 取消</button>
             <span className="selection-count">已选 {selectedIDs.size}</span>
@@ -1303,10 +1264,10 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
               </button>
               <span className="selection-count">已选 {selectedDownloadIDs.size}</span>
               <button className="batch-action batch-action--primary" type="button" disabled={selectedDownloadIDs.size === 0 || batchDownloading} onClick={() => void startBatchDownload()}>
-                {batchDownloading ? '保存中…' : '保存到文件夹'}
+                {batchDownloading ? '正在发起…' : '下载所选文件'}
               </button>
               <button className="batch-action" type="button" onClick={batchDownloading ? () => batchDownloadAbortRef.current?.abort() : closeDownloadSelection}>
-                {batchDownloading ? '取消下载' : '退出'}
+                {batchDownloading ? '停止后续下载' : '退出'}
               </button>
             </>
           ) : (
@@ -1514,19 +1475,6 @@ function TimelineApp({ authSession, onSessionInvalid, onRebindPhone }: { authSes
         </div>
       )}
 
-      {batchDownloadReport && (
-        <div className="sheet-backdrop sheet-backdrop--center" role="presentation">
-          <div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="download-report-title">
-            <h2 id="download-report-title">批量下载结果</h2>
-            <p>
-              成功 {batchDownloadReport.success.length} 个，失败 {batchDownloadReport.failed.length} 个。
-              {batchDownloadReport.failed.length > 0 && <strong className="duplicate-files">失败：{batchDownloadReport.failed.join('、')}</strong>}
-            </p>
-            <div><button className="primary-button" type="button" onClick={() => setBatchDownloadReport(null)}>完成</button></div>
-          </div>
-        </div>
-      )}
-
       {deleteTargets.length > 0 && (
         <div className="sheet-backdrop sheet-backdrop--center" role="presentation">
           <div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-title">
@@ -1701,7 +1649,7 @@ function fileStatusLabel(file?: FileAttachment) {
   return hours >= 24 ? `${Math.ceil(hours / 24)} 天后过期` : `${hours} 小时后过期`
 }
 
-function Brand() {
+function Brand({ connection }: { connection?: ConnectionState }) {
   return (
     <a className="brand" href="/" aria-label="私人文件传输助手首页">
       <span className="brand-mark" aria-hidden="true">
@@ -1709,7 +1657,12 @@ function Brand() {
       </span>
       <span className="brand-copy">
         <strong>传输助手</strong>
-        <small className="brand-instance">{instanceHostLabel(window.location.host)}</small>
+        {connection ? (
+          <small className={`brand-connection brand-connection--${connection}`} role="status">
+            <span aria-hidden="true" />
+            {connection === 'connected' ? '实时连接' : connection === 'connecting' ? '正在连接' : '等待重连'}
+          </small>
+        ) : <small className="brand-instance">{instanceHostLabel(window.location.host)}</small>}
       </span>
     </a>
   )

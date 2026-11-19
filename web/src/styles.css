@@ -32,16 +32,6 @@
 .message-selection input { width: 20px; height: 20px; accent-color: var(--accent); }
 .message-selection { flex: 0 0 44px; padding: 0; }
 .message-selection label { justify-content: center; }
-@media (max-width: 760px) {
-  .timeline-shell { height: 100dvh; min-height: 0; }
-  .timeline-topbar { display: flex; flex-direction: column; align-items: stretch; gap: 10px; padding: 12px 0; }
-  .timeline-heading { flex: 0 0 auto; }
-  .timeline-heading h1 { white-space: nowrap; }
-  .timeline-actions { justify-content: flex-start; gap: 6px; }
-  .timeline-actions .theme-switch { margin-right: auto; }
-  .timeline-actions .theme-switch button { width: 42px; }
-  .timeline-actions .batch-action { min-height: 36px; }
-}
 html { min-width: 320px; min-height: 100%; background: var(--background); }
 body { margin: 0; min-width: 320px; min-height: 100vh; color: var(--text); background: var(--background); }
 button, input, textarea { font: inherit; }
@@ -192,25 +182,29 @@ footer { min-height: 68px; display: flex; align-items: center; justify-content: 
 .timeline-topbar {
   flex: 0 0 auto;
   min-height: 88px;
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 200px) minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
   gap: 24px;
+  padding: 10px 0;
   border-bottom: 1px solid var(--border);
 }
 
-.timeline-heading,
-.timeline-actions,
-.timeline-heading > div:last-child {
+.timeline-actions {
   display: flex;
   align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
-.timeline-heading { gap: 28px; }
-.timeline-heading > div:last-child { align-items: flex-start; flex-direction: column; gap: 2px; padding-left: 28px; border-left: 1px solid var(--border); }
-.timeline-heading h1 { font-size: 17px; line-height: 1.25; letter-spacing: -.02em; }
-.timeline-heading p { margin: 0; color: var(--text-secondary); font-size: 11px; font-weight: 650; }
-.timeline-actions { gap: 9px; flex-wrap: wrap; justify-content: flex-end; }
+.timeline-preferences { display: grid; justify-items: start; gap: 6px; padding-left: 16px; border-left: 1px solid var(--border); }
+.timeline-preferences .device-name-command { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.timeline-preferences .theme-switch button { width: 36px; height: 30px; }
+.brand-connection { display: inline-flex; align-items: center; gap: 5px; color: var(--text-secondary); font-size: 11px; font-weight: 650; white-space: nowrap; }
+.brand-connection > span { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.brand-connection--connected { color: var(--success); }
+.brand-connection--connecting > span { animation: pulse 1.3s ease-in-out infinite; }
 
 .batch-action {
   min-height: 38px;
@@ -590,10 +584,6 @@ footer { min-height: 68px; display: flex; align-items: center; justify-content: 
 @media (max-width: 700px) {
   .timeline-shell { width: min(100% - 24px, 640px); }
   .lan-shell { width: min(100% - 24px, 640px); }
-  .timeline-topbar { min-height: 76px; }
-  .timeline-heading { gap: 14px; }
-  .timeline-heading > div:last-child { padding-left: 14px; }
-  .timeline-heading .brand-instance { display: none; }
   .connection-badge { padding: 0 10px; }
   .timeline-list { padding: 22px 4px 28px; }
   .message-row { max-width: 88%; }
@@ -610,8 +600,6 @@ footer { min-height: 68px; display: flex; align-items: center; justify-content: 
 }
 
 @media (max-width: 460px) {
-  .timeline-heading > div:last-child p { display: none; }
-  .timeline-heading h1 { font-size: 15px; }
   .connection-badge { font-size: 0; min-width: 34px; justify-content: center; }
   .connection-badge > span { width: 8px; height: 8px; }
   .message-actions { gap: 4px; }
@@ -653,5 +641,7 @@ footer { min-height: 68px; display: flex; align-items: center; justify-content: 
 
 @media (max-width: 760px) {
   .timeline-shell { height: 100dvh; min-height: 0; }
-  .timeline-topbar { align-items: stretch; }
+  .timeline-topbar { grid-template-columns: auto minmax(0, 1fr); gap: 10px 12px; }
+  .timeline-preferences { justify-items: end; padding-left: 0; border-left: 0; }
+  .timeline-actions { grid-column: 1 / -1; justify-content: flex-start; gap: 6px; }
 }
